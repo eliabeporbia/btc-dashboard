@@ -453,10 +453,11 @@ with tab4:  # Cenários
         ["Halving", "Crash", "ETF Approval"]
     )
     
-    # Simular
+    # Simular (linha corrigida com parêntese fechado)
     simulated_prices = simulate_event(
         event, 
         data['prices']['price'].tail(90).reset_index(drop=True)
+    )
     
     fig_scenario = go.Figure()
     fig_scenario.add_trace(go.Scatter(
