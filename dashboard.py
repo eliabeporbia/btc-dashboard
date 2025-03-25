@@ -12,6 +12,8 @@ from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import ParameterGrid
 from itertools import product
 import re
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import RBF, ConstantKernel
 
 # ======================
 # CONFIGURAÇÕES INICIAIS
@@ -86,6 +88,54 @@ def calculate_stochastic(price_series, k_window=14, d_window=3):
     stoch_k = stoch.rolling(window=d_window).mean()
     stoch_d = stoch_k.rolling(window=d_window).mean()
     return stoch_k, stoch_d
+
+def calculate_gaussian_process(price_series, window=30, lookahead=5):
+    """Calcula a Regressão de Processo Gaussiano para previsão"""
+    if len(price_series) < window + lookahead:
+        return pd.Series(np.nan, index=price_series.index)
+    
+    kernel = ConstantKernel(1.0) * RBF(length_scale=1.0)
+    gpr = GaussianProcessRegressor(kernel=kernel, alpha=0.1)
+    
+    predictions = []
+    for i in range(len(price_series) - window - lookahead + 1):
+        X = np.arange(window).reshape(-1, 1)
+        y = price_series.iloc[i:i+window].values
+        
+        try:
+            gpr.fit(X, y)
+            X_pred = np.arange(window, window + lookahead).reshape(-1, 1)
+            y_pred, _ = gpr.predict(X_pred, return_std=True)
+            predictions.extend(y_pred)
+        except:
+            predictions.extend([np.nan] * lookahead)
+    
+    # Preencher os primeiros valores com NaN
+    predictions = [np.nan] * (window + lookahead - 1) + predictions
+    
+    return pd.Series(predictions[:len(price_series)], index=price_series.index)
+
+def get_liquidation_heatmap():
+    """Obtém dados de liquidações da Binance via API da Coinglass"""
+    try:
+        response = requests.get("https://fapi.coinglass.com/api/futures/liquidation/map?symbol=BTC&timeType=1", 
+                              headers={"accept": "application/json"}, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        if 'data' in data and 'priceList' in data['data'] and 'timeList' in data['data']:
+            df = pd.DataFrame({
+                'price': data['data']['priceList'],
+                'time': data['data']['timeList'],
+                'long': data['data']['longList'],
+                'short': data['data']['shortList']
+            })
+            df['time'] = pd.to_datetime(df['time'], unit='ms')
+            df['net'] = df['long'] - df['short']
+            return df
+    except Exception as e:
+        st.warning(f"Não foi possível obter dados de liquidações: {str(e)}")
+    return pd.DataFrame()
 
 def simulate_event(event, price_series):
     """Simula impacto de eventos no preço com tratamento robusto"""
@@ -295,6 +345,47 @@ def backtest_stochastic_strategy(df, k_window=14, d_window=3, overbought=80, ove
     df = calculate_daily_returns(df)
     return calculate_strategy_returns(df)
 
+def backtest_gp_strategy(df, window=30, lookahead=5, threshold=0.03):
+    """Estratégia baseada em Regressão de Processo Gaussiano"""
+    if df.empty or 'price' not in df.columns:
+        return pd.DataFrame()
+    
+    df = df.copy()
+    df['GP_Prediction'] = calculate_gaussian_process(df['price'], window, lookahead)
+    
+    df['signal'] = 0
+    df.loc[df['GP_Prediction'] > df['price'] * (1 + threshold), 'signal'] = 1
+    df.loc[df['GP_Prediction'] < df['price'] * (1 - threshold), 'signal'] = -1
+    
+    df = calculate_daily_returns(df)
+    return calculate_strategy_returns(df)
+
+def backtest_liquidation_strategy(df, liquidation_threshold=0.05):
+    """Estratégia baseada em dados de liquidações"""
+    if df.empty or 'price' not in df.columns:
+        return pd.DataFrame()
+    
+    df = df.copy()
+    liquidation_data = get_liquidation_heatmap()
+    
+    if not liquidation_data.empty:
+        # Mesclar dados de liquidação com preços por timestamp mais próximo
+        df['time'] = df['date'].dt.floor('h')
+        merged = pd.merge_asof(df.sort_values('time'), 
+                             liquidation_data.sort_values('time'), 
+                             on='time', 
+                             direction='nearest')
+        
+        df['net_liquidation'] = merged['net']
+        df['liquidation_ratio'] = df['net_liquidation'] / df['net_liquidation'].abs().rolling(24).mean()
+        
+        df['signal'] = 0
+        df.loc[df['liquidation_ratio'] > liquidation_threshold, 'signal'] = -1  # Muitas liquidações long -> sinal de venda
+        df.loc[df['liquidation_ratio'] < -liquidation_threshold, 'signal'] = 1   # Muitas liquidações short -> sinal de compra
+    
+    df = calculate_daily_returns(df)
+    return calculate_strategy_returns(df)
+
 def calculate_metrics(df):
     """Calcula métricas de performance com tratamento robusto"""
     metrics = {}
@@ -361,6 +452,10 @@ def optimize_strategy_parameters(data, strategy_name, param_space):
                 df = backtest_obv_strategy(data['prices'], **params)
             elif strategy_name == 'Stochastic':
                 df = backtest_stochastic_strategy(data['prices'], **params)
+            elif strategy_name == 'Gaussian Process':
+                df = backtest_gp_strategy(data['prices'], **params)
+            elif strategy_name == 'Liquidation':
+                df = backtest_liquidation_strategy(data['prices'], **params)
             else:
                 continue
                 
@@ -425,6 +520,10 @@ def load_data():
             
             data['prices']['OBV'] = calculate_obv(price_series, volume_series)
             data['prices']['Stoch_K'], data['prices']['Stoch_D'] = calculate_stochastic(price_series)
+            
+            # Adicionar novos indicadores
+            data['prices']['GP_Prediction'] = calculate_gaussian_process(price_series)
+            data['liquidation_heatmap'] = get_liquidation_heatmap()
         
         try:
             hr_response = requests.get("https://api.blockchain.info/charts/hash-rate?format=json&timespan=3months", timeout=10)
@@ -548,6 +647,18 @@ def generate_signals(data, rsi_window=14, bb_window=20):
             stoch_d = data['prices']['Stoch_D'].iloc[-1]
             stoch_signal = "COMPRA" if stoch_k < 20 and stoch_d < 20 else "VENDA" if stoch_k > 80 and stoch_d > 80 else "NEUTRO"
             signals.append(("Stochastic (14,3)", stoch_signal, f"K:{stoch_k:.1f}, D:{stoch_d:.1f}"))
+        
+        # Adicionar sinais dos novos indicadores
+        if 'GP_Prediction' in data['prices'].columns and not data['prices']['GP_Prediction'].isna().all():
+            gp_pred = data['prices']['GP_Prediction'].iloc[-1]
+            gp_signal = "COMPRA" if gp_pred > last_price * 1.03 else "VENDA" if gp_pred < last_price * 0.97 else "NEUTRO"
+            signals.append(("Gaussian Process", gp_signal, f"Previsão: ${gp_pred:,.0f}"))
+        
+        if 'liquidation_heatmap' in data and not data['liquidation_heatmap'].empty:
+            last_liquidation = data['liquidation_heatmap'].iloc[-1]
+            liq_signal = "COMPRA" if last_liquidation['net'] < -100 else "VENDA" if last_liquidation['net'] > 100 else "NEUTRO"
+            signals.append(("Liquidações Binance", liq_signal, 
+                          f"Long: {last_liquidation['long']:,.0f} | Short: {last_liquidation['short']:,.0f}"))
     
     except Exception as e:
         st.error(f"Erro ao gerar sinais: {str(e)}")
@@ -579,7 +690,9 @@ DEFAULT_SETTINGS = {
     'rsi_window': 14,
     'bb_window': 20,
     'ma_windows': [7, 30, 200],
-    'email': ''
+    'email': '',
+    'gp_window': 30,
+    'gp_lookahead': 5
 }
 
 if 'user_settings' not in st.session_state:
@@ -607,6 +720,18 @@ ma_windows = st.sidebar.multiselect(
     st.session_state.user_settings['ma_windows']
 )
 
+gp_window = st.sidebar.slider(
+    "Janela do Gaussian Process", 
+    10, 60, 
+    st.session_state.user_settings['gp_window']
+)
+
+gp_lookahead = st.sidebar.slider(
+    "Previsão do Gaussian Process (dias)", 
+    1, 10, 
+    st.session_state.user_settings['gp_lookahead']
+)
+
 st.sidebar.subheader("🔔 Alertas Automáticos")
 email = st.sidebar.text_input(
     "E-mail para notificações", 
@@ -620,7 +745,9 @@ with col1:
             'rsi_window': rsi_window,
             'bb_window': bb_window,
             'ma_windows': ma_windows,
-            'email': email
+            'email': email,
+            'gp_window': gp_window,
+            'gp_lookahead': gp_lookahead
         }
         st.sidebar.success("Configurações salvas com sucesso!")
         
@@ -743,6 +870,17 @@ with tab1:
                 if stoch_signal:
                     stoch_color = "🟢" if stoch_signal[1] == "COMPRA" else "🔴" if stoch_signal[1] == "VENDA" else "🟡"
                     st.markdown(f"{stoch_color} **{stoch_signal[0]}**: {stoch_signal[1]} ({stoch_signal[2]})")
+                
+                # Adicionar novos sinais
+                gp_signal = next((s for s in signals if "Gaussian Process" in s[0]), None)
+                if gp_signal:
+                    gp_color = "🟢" if gp_signal[1] == "COMPRA" else "🔴" if gp_signal[1] == "VENDA" else "🟡"
+                    st.markdown(f"{gp_color} **{gp_signal[0]}**: {gp_signal[1]} ({gp_signal[2]})")
+                
+                liq_signal = next((s for s in signals if "Liquidações" in s[0]), None)
+                if liq_signal:
+                    liq_color = "🟢" if liq_signal[1] == "COMPRA" else "🔴" if liq_signal[1] == "VENDA" else "🟡"
+                    st.markdown(f"{liq_color} **{liq_signal[0]}**: {liq_signal[1]} ({liq_signal[2]})")
         
         st.divider()
         st.subheader("📌 Análise Consolidada")
@@ -803,7 +941,7 @@ with tab3:
     
     strategy = st.selectbox(
         "Escolha sua Estratégia:",
-        ["RSI", "MACD", "Bollinger", "EMA Cross", "Volume", "OBV", "Stochastic"],
+        ["RSI", "MACD", "Bollinger", "EMA Cross", "Volume", "OBV", "Stochastic", "Gaussian Process", "Liquidation"],
         key="backtest_strategy"
     )
     
@@ -854,6 +992,16 @@ with tab3:
                 oversold = st.slider("Sobrevenda", 10, 30, 20)
                 df = backtest_stochastic_strategy(data['prices'], k_window, d_window, overbought, oversold)
                 
+            elif strategy == "Gaussian Process":
+                window = st.slider("Janela Histórica", 10, 60, st.session_state.user_settings['gp_window'])
+                lookahead = st.slider("Dias de Previsão", 1, 10, st.session_state.user_settings['gp_lookahead'])
+                threshold = st.slider("Limiar de Sinal (%)", 1.0, 10.0, 3.0, 0.5)
+                df = backtest_gp_strategy(data['prices'], window, lookahead, threshold/100)
+                
+            elif strategy == "Liquidation":
+                threshold = st.slider("Limiar de Liquidações", 0.01, 0.2, 0.05, 0.01)
+                df = backtest_liquidation_strategy(data['prices'], threshold)
+                
         except Exception as e:
             st.error(f"Erro ao configurar estratégia: {str(e)}")
             st.stop()
@@ -895,6 +1043,18 @@ with tab3:
             st.markdown("""
             - **Compra**: %K e %D abaixo da zona de sobrevenda
             - **Venda**: %K e %D acima da zona de sobrecompra
+            """)
+        elif strategy == "Gaussian Process":
+            st.markdown("""
+            - **Compra**: Previsão > Preço Atual + Limiar
+            - **Venda**: Previsão < Preço Atual - Limiar
+            - Usa regressão não-linear para prever tendências
+            """)
+        elif strategy == "Liquidation":
+            st.markdown("""
+            - **Compra**: Muitas liquidações de posições short
+            - **Venda**: Muitas liquidações de posições long
+            - Baseado em dados da Binance via Coinglass
             """)
     
     if df.empty:
@@ -990,6 +1150,16 @@ with tab3:
                     'overbought': range(75, 86, 5),
                     'oversold': range(15, 26, 5)
                 }
+            elif strategy == "Gaussian Process":
+                param_space = {
+                    'window': range(20, 41, 5),
+                    'lookahead': range(3, 8),
+                    'threshold': [0.02, 0.03, 0.04, 0.05]
+                }
+            elif strategy == "Liquidation":
+                param_space = {
+                    'liquidation_threshold': [0.03, 0.05, 0.07, 0.10]
+                }
             
             best_params, best_sharpe, best_df = optimize_strategy_parameters(
                 data, strategy, param_space)
@@ -1003,6 +1173,9 @@ with tab3:
                         st.session_state.user_settings['rsi_window'] = best_params['rsi_window']
                     elif strategy == "Bollinger":
                         st.session_state.user_settings['bb_window'] = best_params['window']
+                    elif strategy == "Gaussian Process":
+                        st.session_state.user_settings['gp_window'] = best_params['window']
+                        st.session_state.user_settings['gp_lookahead'] = best_params['lookahead']
                     st.rerun()
             else:
                 st.warning("Não foi possível encontrar parâmetros otimizados")
@@ -1140,6 +1313,40 @@ with tab5:
             fig_stoch.add_hline(y=20, line_dash="dash", line_color="green")
             fig_stoch.update_layout(title="Stochastic Oscillator (14,3)")
             st.plotly_chart(fig_stoch, use_container_width=True)
+        
+        # Adicionar visualizações para os novos indicadores
+        if 'GP_Prediction' in data['prices'].columns and not data['prices']['GP_Prediction'].isna().all():
+            fig_gp = go.Figure()
+            fig_gp.add_trace(go.Scatter(
+                x=data['prices']['date'],
+                y=data['prices']['price'],
+                name="Preço Real"
+            ))
+            fig_gp.add_trace(go.Scatter(
+                x=data['prices']['date'],
+                y=data['prices']['GP_Prediction'],
+                name="Previsão GP",
+                line=dict(color='purple', dash='dot')
+            ))
+            fig_gp.update_layout(title="Regressão de Processo Gaussiano (Previsão)")
+            st.plotly_chart(fig_gp, use_container_width=True)
+        
+        if 'liquidation_heatmap' in data and not data['liquidation_heatmap'].empty:
+            fig_liq = go.Figure()
+            fig_liq.add_trace(go.Scatter(
+                x=data['liquidation_heatmap']['time'],
+                y=data['liquidation_heatmap']['long'],
+                name="Liquidações Long",
+                line=dict(color='red')
+            ))
+            fig_liq.add_trace(go.Scatter(
+                x=data['liquidation_heatmap']['time'],
+                y=data['liquidation_heatmap']['short'],
+                name="Liquidações Short",
+                line=dict(color='green')
+            ))
+            fig_liq.update_layout(title="Mapa de Calor de Liquidações (Binance BTC/USDT)")
+            st.plotly_chart(fig_liq, use_container_width=True)
 
 with tab6:
     st.subheader("📤 Exportar Dados Completo")
@@ -1183,6 +1390,8 @@ with tab6:
                     data['prices'].to_excel(writer, sheet_name="BTC Prices")
                 if not traditional_assets.empty:
                     traditional_assets.to_excel(writer, sheet_name="Traditional Assets")
+                if 'liquidation_heatmap' in data and not data['liquidation_heatmap'].empty:
+                    data['liquidation_heatmap'].to_excel(writer, sheet_name="Liquidation Heatmap")
             st.success(f"Dados exportados! [Download aqui]({tmp.name})")
 
 st.sidebar.markdown("""
@@ -1201,9 +1410,11 @@ st.sidebar.markdown("""
 5. Volume (confirmação)
 6. OBV (fluxo de capital)
 7. Stochastic (sobrecompra/sobrevenda)
-8. Fluxo de Exchanges
-9. Hashrate vs Dificuldade
-10. Atividade de Whales
-11. Análise Sentimental
-12. Comparação com Mercado Tradicional
+8. Regressão de Processo Gaussiano (previsão)
+9. Mapa de Calor de Liquidações (Binance)
+10. Fluxo de Exchanges
+11. Hashrate vs Dificuldade
+12. Atividade de Whales
+13. Análise Sentimental
+14. Comparação com Mercado Tradicional
 """)
