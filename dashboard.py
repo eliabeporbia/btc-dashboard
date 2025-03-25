@@ -200,11 +200,19 @@ if signals:
         color = '#4CAF50' if val == "COMPRA" else '#F44336' if val == "VENDA" else '#FFC107'
         return f'background-color: {color}'
     
-    st.dataframe
-        df_signals.style.applymap(color_signal, subset=["Sinal"]),
+if signals:
+    df_signals = pd.DataFrame(signals, columns=["Indicador", "Sinal", "Valor"])
+    
+    def color_signal(val):
+        color = '#4CAF50' if val == "COMPRA" else '#F44336' if val == "VENDA" else '#FFC107'
+        return f'background-color: {color}'
+    
+    st.dataframe(
+        df_signals.style.applymap(color_signal, subset=["Sinal"]),  # ← Correção aqui
         hide_index=True,
         use_container_width=True,
         height=(len(df_signals) * 35 + 38)
+    )
 else:
     st.warning("Não foi possível gerar sinais. Verifique os dados.")
 
