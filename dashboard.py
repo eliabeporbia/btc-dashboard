@@ -192,7 +192,7 @@ col4.metric("Análise Final", final_verdict)
 # Resumo de sinais
 st.subheader(f"📊 Resumo de Sinais (COMPRA: {buy_signals} | VENDA: {sell_signals})")
 
-# Tabela de sinais detalhados
+# Tabela de sinais detalhados (SEÇÃO CORRIGIDA)
 if signals:
     df_signals = pd.DataFrame(signals, columns=["Indicador", "Sinal", "Valor"])
     
