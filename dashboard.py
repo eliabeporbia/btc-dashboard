@@ -333,7 +333,11 @@ with col2:
     if st.button("🔄 Resetar"):
         st.session_state.user_settings = DEFAULT_SETTINGS.copy()
         st.sidebar.success("Configurações resetadas para padrão!")
-        st.experimental_rerun()
+        # Solução universal que funciona em todas versões
+        if hasattr(st, 'rerun'):
+            st.rerun()
+        else:
+            st.experimental_rerun()
 
 if st.sidebar.button("Ativar Monitoramento Contínuo"):
     st.sidebar.success("Alertas ativados!")
@@ -453,7 +457,7 @@ with tab4:  # Cenários
         ["Halving", "Crash", "ETF Approval"]
     )
     
-    # Simular (linha corrigida com parêntese fechado)
+    # Simular (linha corrigida)
     simulated_prices = simulate_event(
         event, 
         data['prices']['price'].tail(90).reset_index(drop=True)
