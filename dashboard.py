@@ -9,6 +9,8 @@ from fpdf import FPDF
 import yfinance as yf
 import tempfile
 from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import ParameterGrid
+from itertools import product
 
 # ======================
 # CONFIGURAÇÕES INICIAIS
@@ -17,7 +19,161 @@ st.set_page_config(layout="wide", page_title="BTC Super Dashboard Pro+")
 st.title("🚀 BTC Super Dashboard Pro+ - Edição Premium")
 
 # ======================
-# FUNÇÕES DE CÁLCULO
+# NOVAS FUNÇÕES DE BACKTESTING AVANÇADO
+# ======================
+
+def calculate_daily_returns(df):
+    """Calcula retornos diários e cumulativos"""
+    df['daily_return'] = df['price'].pct_change()
+    df['cumulative_return'] = (1 + df['daily_return']).cumprod()
+    return df
+
+def calculate_strategy_returns(df, signal_col='signal'):
+    """Calcula retornos da estratégia baseada em coluna de sinais"""
+    df['strategy_return'] = df[signal_col].shift(1) * df['daily_return']
+    df['strategy_cumulative'] = (1 + df['strategy_return']).cumprod()
+    return df
+
+def backtest_rsi_strategy(df, rsi_window=14, overbought=70, oversold=30):
+    """Estratégia avançada de RSI com zonas personalizadas"""
+    df = df.copy()
+    df['RSI'] = calculate_rsi(df['price'], rsi_window)
+    
+    # Sinais mais sofisticados com confirmação
+    df['signal'] = 0
+    df.loc[(df['RSI'] < oversold) & (df['price'] > df['MA30']), 'signal'] = 1
+    df.loc[(df['RSI'] > overbought) & (df['price'] < df['MA30']), 'signal'] = -1
+    
+    return calculate_strategy_returns(df)
+
+def backtest_macd_strategy(df, fast=12, slow=26, signal=9):
+    """Estratégia MACD cruzamento de linha zero e linha de sinal"""
+    df = df.copy()
+    df['MACD'], df['MACD_Signal'] = calculate_macd(df['price'], fast, slow, signal)
+    
+    # Cruzamento de linha zero
+    df['signal'] = 0
+    df.loc[df['MACD'] > 0, 'signal'] = 1
+    df.loc[df['MACD'] < 0, 'signal'] = -1
+    
+    # Cruzamento de linha de sinal (sobrescreve se for mais forte)
+    df.loc[(df['MACD'] > df['MACD_Signal']) & (df['MACD'] > 0), 'signal'] = 1.5  # Compra forte
+    df.loc[(df['MACD'] < df['MACD_Signal']) & (df['MACD'] < 0), 'signal'] = -1.5 # Venda forte
+    
+    return calculate_strategy_returns(df)
+
+def backtest_bollinger_strategy(df, window=20, num_std=2):
+    """Estratégia Bandas de Bollinger com saída progressiva"""
+    df = df.copy()
+    df['BB_Upper'], df['BB_Lower'] = calculate_bollinger_bands(df['price'], window, num_std)
+    df['MA'] = df['price'].rolling(window).mean()
+    
+    df['signal'] = 0
+    # Entrada quando toca banda inferior
+    df.loc[df['price'] < df['BB_Lower'], 'signal'] = 1
+    # Saída progressiva - 50% na média, 50% na banda superior
+    df.loc[(df['price'] > df['MA']) & (df['signal'].shift(1) == 1), 'signal'] = 0.5
+    df.loc[df['price'] > df['BB_Upper'], 'signal'] = -1  # Venda se tocar banda superior
+    
+    return calculate_strategy_returns(df)
+
+def backtest_ema_cross_strategy(df, short_window=9, long_window=21):
+    """Estratégia de cruzamento de EMAs"""
+    df = df.copy()
+    df['EMA_Short'] = calculate_ema(df['price'], short_window)
+    df['EMA_Long'] = calculate_ema(df['price'], long_window)
+    
+    df['signal'] = 0
+    df.loc[df['EMA_Short'] > df['EMA_Long'], 'signal'] = 1  # Compra quando EMA curta cruza acima
+    df.loc[df['EMA_Short'] < df['EMA_Long'], 'signal'] = -1 # Venda quando EMA curta cruza abaixo
+    
+    return calculate_strategy_returns(df)
+
+def calculate_metrics(df):
+    """Calcula métricas avançadas de performance"""
+    metrics = {}
+    returns = df['strategy_return'].dropna()
+    buy_hold_returns = df['daily_return'].dropna()
+    
+    # Retornos
+    metrics['Retorno Estratégia'] = df['strategy_cumulative'].iloc[-1] - 1
+    metrics['Retorno Buy & Hold'] = df['cumulative_return'].iloc[-1] - 1
+    
+    # Volatilidade
+    metrics['Vol Estratégia'] = returns.std() * np.sqrt(365)
+    metrics['Vol Buy & Hold'] = buy_hold_returns.std() * np.sqrt(365)
+    
+    # Razão Sharpe (assumindo risco zero)
+    metrics['Sharpe Estratégia'] = returns.mean() / returns.std() * np.sqrt(365)
+    metrics['Sharpe Buy & Hold'] = buy_hold_returns.mean() / buy_hold_returns.std() * np.sqrt(365)
+    
+    # Drawdown
+    cum_returns = (1 + returns).cumprod()
+    peak = cum_returns.expanding(min_periods=1).max()
+    drawdown = (cum_returns - peak) / peak
+    metrics['Max Drawdown'] = drawdown.min()
+    
+    # Win Rate
+    metrics['Win Rate'] = len(returns[returns > 0]) / len(returns)
+    
+    # Taxa de Acerto
+    trades = df[df['signal'] != 0]
+    if len(trades) > 0:
+        metrics['Taxa Acerto'] = len(trades[trades['strategy_return'] > 0]) / len(trades)
+    else:
+        metrics['Taxa Acerto'] = 0
+    
+    return metrics
+
+def optimize_strategy_parameters(data, strategy_name, param_space):
+    """Otimiza os parâmetros de uma estratégia específica"""
+    best_sharpe = -np.inf
+    best_params = None
+    best_results = None
+    
+    # Gerar todas combinações de parâmetros
+    param_combinations = list(ParameterGrid(param_space))
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for i, params in enumerate(param_combinations):
+        try:
+            # Executar backtest com os parâmetros atuais
+            if strategy_name == 'RSI':
+                df = backtest_rsi_strategy(data['prices'], **params)
+            elif strategy_name == 'MACD':
+                df = backtest_macd_strategy(data['prices'], **params)
+            elif strategy_name == 'Bollinger':
+                df = backtest_bollinger_strategy(data['prices'], **params)
+            elif strategy_name == 'EMA Cross':
+                df = backtest_ema_cross_strategy(data['prices'], **params)
+            
+            # Calcular métricas
+            returns = df['strategy_return'].dropna()
+            if len(returns) > 0:
+                sharpe = returns.mean() / returns.std() * np.sqrt(365)
+                
+                # Atualizar melhor combinação se necessário
+                if sharpe > best_sharpe:
+                    best_sharpe = sharpe
+                    best_params = params
+                    best_results = df
+        except:
+            continue
+        
+        # Atualizar barra de progresso
+        progress = (i + 1) / len(param_combinations)
+        progress_bar.progress(progress)
+        status_text.text(f"Testando combinação {i+1}/{len(param_combinations)} | Melhor Sharpe: {best_sharpe:.2f}")
+    
+    progress_bar.empty()
+    status_text.empty()
+    
+    return best_params, best_sharpe, best_results
+
+# ======================
+# FUNÇÕES ORIGINAIS (MANTIDAS)
 # ======================
 
 def calculate_ema(series, window):
@@ -51,10 +207,6 @@ def calculate_bollinger_bands(series, window=20, num_std=2):
     upper = sma + (std * num_std)
     lower = sma - (std * num_std)
     return upper, lower
-
-# ======================
-# NOVAS FUNÇÕES ADICIONADAS
-# ======================
 
 def get_market_sentiment():
     """Coleta dados de sentimentos do mercado"""
@@ -114,10 +266,6 @@ def simulate_event(event, price_series):
     else:  # "ETF Approval"
         return price_series * 1.5  # +50% instantâneo
 
-# ======================
-# CARREGAMENTO DE DADOS
-# ======================
-
 @st.cache_data(ttl=3600)
 def load_data():
     data = {}
@@ -171,10 +319,6 @@ def load_data():
     except Exception as e:
         st.error(f"Erro ao processar dados: {str(e)}")
     return data
-
-# ======================
-# GERADOR DE SINAIS
-# ======================
 
 def generate_signals(data, rsi_window=14, bb_window=20):
     signals = []
@@ -338,7 +482,6 @@ with col2:
     if st.button("🔄 Resetar"):
         st.session_state.user_settings = DEFAULT_SETTINGS.copy()
         st.sidebar.success("Configurações resetadas para padrão!")
-        # Solução universal que funciona em todas versões
         if hasattr(st, 'rerun'):
             st.rerun()
         else:
@@ -499,24 +642,152 @@ with tab2:  # Comparativos
     )
     st.plotly_chart(fig_comp, use_container_width=True)
 
-with tab3:  # Backtesting
-    st.subheader("🧪 Backtesting Estratégico")
-    bt_data = backtest_strategy(data, rsi_window=st.session_state.user_settings['rsi_window'])
+with tab3:  # Backtesting (COMPLETAMENTE REFEITO)
+    st.subheader("🧪 Backtesting Avançado")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Retorno da Estratégia", 
-                 f"{(bt_data['cumulative_return'].iloc[-1] - 1)*100:.2f}%")
-    with col2:
-        st.metric("Operações Geradas", 
-                 f"{len(bt_data[bt_data['signal'] != 0])}")
-    
-    fig_bt = px.line(
-        bt_data, 
-        x="date", y=["cumulative_return"], 
-        title="Performance da Estratégia"
+    # Seletor de estratégia
+    strategy = st.selectbox(
+        "Escolha sua Estratégia:",
+        ["RSI", "MACD", "Bollinger", "EMA Cross"],
+        key="backtest_strategy"
     )
-    st.plotly_chart(fig_bt, use_container_width=True)
+    
+    # Parâmetros dinâmicos
+    params_col1, params_col2 = st.columns(2)
+    with params_col1:
+        if strategy == "RSI":
+            rsi_window = st.slider("Período RSI", 7, 21, 14)
+            overbought = st.slider("Zona de Sobrevenda", 70, 90, 70)
+            oversold = st.slider("Zona de Sobrecompra", 10, 30, 30)
+            df = backtest_rsi_strategy(data['prices'], rsi_window, overbought, oversold)
+            
+        elif strategy == "MACD":
+            fast = st.slider("EMA Rápida", 5, 20, 12)
+            slow = st.slider("EMA Lenta", 20, 50, 26)
+            signal = st.slider("Linha de Sinal", 5, 20, 9)
+            df = backtest_macd_strategy(data['prices'], fast, slow, signal)
+            
+        elif strategy == "Bollinger":
+            window = st.slider("Janela", 10, 50, 20)
+            num_std = st.slider("Nº de Desvios", 1.0, 3.0, 2.0, 0.1)
+            df = backtest_bollinger_strategy(data['prices'], window, num_std)
+            
+        else:  # EMA Cross
+            short_window = st.slider("EMA Curta", 5, 20, 9)
+            long_window = st.slider("EMA Longa", 20, 50, 21)
+            df = backtest_ema_cross_strategy(data['prices'], short_window, long_window)
+    
+    with params_col2:
+        # Mostrar descrição da estratégia
+        st.markdown("**📝 Descrição da Estratégia**")
+        if strategy == "RSI":
+            st.markdown("""
+            - **Compra**: Quando RSI < Zona de Sobrecompra e preço > MA30
+            - **Venda**: Quando RSI > Zona de Sobrevenda e preço < MA30
+            """)
+        elif strategy == "MACD":
+            st.markdown("""
+            - **Compra Forte**: MACD > 0 e cruzando linha de sinal para cima
+            - **Venda Forte**: MACD < 0 e cruzando linha de sinal para baixo
+            """)
+        elif strategy == "Bollinger":
+            st.markdown("""
+            - **Compra**: Preço toca banda inferior
+            - **Venda Parcial**: Preço cruza a média móvel
+            - **Venda Total**: Preço toca banda superior
+            """)
+        else:  # EMA Cross
+            st.markdown("""
+            - **Compra**: EMA curta cruza EMA longa para cima
+            - **Venda**: EMA curta cruza EMA longa para baixo
+            """)
+    
+    # Calcular métricas
+    metrics = calculate_metrics(df)
+    
+    # Mostrar resultados
+    st.subheader("📊 Resultados do Backtesting")
+    
+    # Gráfico comparativo
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df['date'], y=df['strategy_cumulative'],
+        name="Estratégia",
+        line=dict(color='green', width=2)
+    ))
+    fig.add_trace(go.Scatter(
+        x=df['date'], y=df['cumulative_return'],
+        name="Buy & Hold",
+        line=dict(color='blue', width=2)
+    ))
+    fig.update_layout(
+        title="Desempenho Comparativo",
+        yaxis_title="Retorno Acumulado",
+        hovermode="x unified"
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Métricas de performance
+    st.subheader("📈 Métricas de Performance")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Retorno Estratégia", f"{metrics['Retorno Estratégia']:.2%}",
+                 delta=f"{(metrics['Retorno Estratégia'] - metrics['Retorno Buy & Hold']):.2%} vs B&H")
+    with col2:
+        st.metric("Retorno Buy & Hold", f"{metrics['Retorno Buy & Hold']:.2%}")
+    with col3:
+        st.metric("Sharpe Ratio", f"{metrics['Sharpe Estratégia']:.2f}",
+                 delta=f"{(metrics['Sharpe Estratégia'] - metrics['Sharpe Buy & Hold']):.2f} vs B&H")
+    
+    col4, col5, col6 = st.columns(3)
+    with col4:
+        st.metric("Volatilidade", f"{metrics['Vol Estratégia']:.2%}",
+                 delta=f"{(metrics['Vol Estratégia'] - metrics['Vol Buy & Hold']):.2%} vs B&H")
+    with col5:
+        st.metric("Max Drawdown", f"{metrics['Max Drawdown']:.2%}")
+    with col6:
+        st.metric("Taxa de Acerto", f"{metrics['Taxa Acerto']:.2%}")
+    
+    # Otimização de parâmetros
+    st.subheader("⚙️ Otimização Automática de Parâmetros")
+    if st.checkbox("🔍 Executar Otimização (Pode demorar)"):
+        with st.spinner("Otimizando parâmetros..."):
+            if strategy == "RSI":
+                param_space = {
+                    'rsi_window': range(10, 21),
+                    'overbought': range(70, 81, 5),
+                    'oversold': range(20, 31, 5)
+                }
+            elif strategy == "MACD":
+                param_space = {
+                    'fast': range(10, 21),
+                    'slow': range(20, 31),
+                    'signal': range(5, 16)
+                }
+            elif strategy == "Bollinger":
+                param_space = {
+                    'window': range(15, 26),
+                    'num_std': [1.5, 2.0, 2.5]
+                }
+            else:  # EMA Cross
+                param_space = {
+                    'short_window': range(5, 16),
+                    'long_window': range(15, 26)
+                }
+            
+            best_params, best_sharpe, best_df = optimize_strategy_parameters(
+                data, strategy, param_space)
+            
+            st.success(f"🎯 Melhores parâmetros encontrados (Sharpe: {best_sharpe:.2f}):")
+            st.write(best_params)
+            
+            if st.button("Aplicar Parâmetros Otimizados"):
+                if strategy == "RSI":
+                    st.session_state.user_settings['rsi_window'] = best_params['rsi_window']
+                elif strategy == "Bollinger":
+                    st.session_state.user_settings['bb_window'] = best_params['window']
+                st.rerun()
 
 with tab4:  # Cenários
     st.subheader("🌍 Simulação de Eventos")
