@@ -1,16 +1,7 @@
-# CORE
 streamlit==1.29.0
 pandas==2.1.4
 plotly==5.18.0
 python-dotenv==1.0.0
 requests==2.31.0
-
-# NLP (Análise de Sentimento)
-transformers==4.30.2  # Versão mais leve
-sentencepiece==0.1.99  # Necessário para o transformers
-
-# PDF
+transformers==4.30.2
 fpdf2==2.7.7
-
-# Sons (Alternativa ao PyGame)
-simpleaudio==1.0.4  # Mais compatível com a nuvem
