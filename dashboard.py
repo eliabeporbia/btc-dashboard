@@ -280,15 +280,41 @@ if st.sidebar.button("Ativar Monitoramento Contínuo"):
 # Seção principal
 st.header("📊 Painel Integrado BTC Pro+")
 
-# Linha de métricas
+# Linha de métricas (ATUALIZADA COM PORCENTAGENS)
 col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Preço BTC", f"${data['prices']['price'].iloc[-1]:,.2f}")
+
+# Sentimento (mantido igual)
 col2.metric("Sentimento", f"{sentiment['value']}/100", sentiment['sentiment'])
-col3.metric("S&P 500", f"${traditional_assets[traditional_assets['asset']=='S&P 500']['value'].iloc[-1]:,.0f}")
-col4.metric("Ouro", f"${traditional_assets[traditional_assets['asset']=='Ouro']['value'].iloc[-1]:,.0f}")
+
+# S&P 500 com % (NOVO)
+sp500_data = traditional_assets[traditional_assets['asset']=='S&P 500']
+sp500_value = sp500_data['value'].iloc[-1]
+sp500_prev = sp500_data['value'].iloc[-2] if len(sp500_data) > 1 else sp500_value
+sp500_change = (sp500_value/sp500_prev - 1)*100
+col3.metric(
+    "S&P 500", 
+    f"${sp500_value:,.0f}",
+    f"{sp500_change:+.2f}%",
+    delta_color="normal"
+)
+
+# Ouro com % (NOVO)
+ouro_data = traditional_assets[traditional_assets['asset']=='Ouro']
+ouro_value = ouro_data['value'].iloc[-1]
+ouro_prev = ouro_data['value'].iloc[-2] if len(ouro_data) > 1 else ouro_value
+ouro_change = (ouro_value/ouro_prev - 1)*100
+col4.metric(
+    "Ouro", 
+    f"${ouro_value:,.0f}",
+    f"{ouro_change:+.2f}%",
+    delta_color="normal"
+)
+
+# Análise Final (mantido igual)
 col5.metric("Análise Final", final_verdict)
 
-# Abas principais
+# Abas principais (MANTIDAS ORIGINAIS)
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📈 Mercado", 
     "🆚 Comparativos", 
@@ -304,7 +330,7 @@ with tab1:  # Mercado
                      title="Preço BTC e Médias Móveis")
         st.plotly_chart(fig, use_container_width=True)
     
-    # Novo: Gráfico de Sentimento
+    # Gráfico de Sentimento
     st.subheader("📊 Sentimento do Mercado")
     fig_sent = go.Figure(go.Indicator(
         mode="gauge+number",
