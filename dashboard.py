@@ -2,66 +2,117 @@ import streamlit as st
 import requests
 import pandas as pd
 import plotly.express as px
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Configuração do painel
-st.set_page_config(layout="wide", page_title="BTC On-Chain Simplificado")
-st.title("💰 Painel BTC Simplificado (Dados Reais)")
+st.set_page_config(layout="wide", page_title="BTC On-Chain Dashboard")
+st.title("📊 Painel BTC On-Chain (Dados Reais)")
 
-# ---- DADOS EM TEMPO REAL ----
-@st.cache_data(ttl=600)  # Atualiza a cada 10 minutos
-def get_data():
+# ---- 1. PREÇO DO BTC (COINGECKO) ----
+@st.cache_data(ttl=3600)
+def get_btc_price():
     try:
-        # Preço do BTC
-        price_url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
-        price = requests.get(price_url).json()["bitcoin"]["usd"]
-        
-        # Dificuldade e Hashrate (simplificado)
-        diff = float(requests.get("https://blockchain.info/q/getdifficulty").text)
-        hashrate = diff / (600 * 1e12)  # Fórmula simplificada
-        
-        return {
-            "price": price,
-            "difficulty": diff,
-            "hashrate": hashrate,
-            "status": "✅ Saudável" if hashrate > 500000 else "⚠️ Fraco"
-        }
-    except:
-        return {"price": 0, "difficulty": 0, "hashrate": 0, "status": "Erro"}
+        url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=90"
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        prices = pd.DataFrame(data["prices"], columns=["timestamp", "price"])
+        prices["date"] = pd.to_datetime(prices["timestamp"], unit="ms")
+        return prices
+    except Exception as e:
+        st.error(f"Erro ao obter preço: {str(e)}")
+        return pd.DataFrame(columns=["timestamp", "price", "date"])
 
-data = get_data()
+# ---- 2. HASH RATE (BLOCKCHAIN.COM) ----
+@st.cache_data(ttl=3600)
+def get_hash_rate():
+    try:
+        url = "https://api.blockchain.info/charts/hash-rate?format=json&timespan=3months"
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        df = pd.DataFrame(data["values"])
+        df["date"] = pd.to_datetime(df["x"], unit="s")
+        return df
+    except Exception as e:
+        st.error(f"Erro ao obter hash rate: {str(e)}")
+        return pd.DataFrame(columns=["x", "y", "date"])
 
-# ---- LAYOUT SIMPLES ----
-st.header("📌 Status Atual")
-col1, col2, col3 = st.columns(3)
-col1.metric("Preço BTC", f"${data['price']:,.2f}")
-col2.metric("Dificuldade", f"{data['difficulty']/1e12:,.1f}T")
-col3.metric("Hash Rate", f"{data['hashrate']:,.0f} TH/s", data['status'])
+# ---- 3. FLUXO DE EXCHANGES (SIMULADO) ----
+@st.cache_data(ttl=3600)
+def get_exchange_flows():
+    # Dados simulados (como na versão anterior)
+    return {
+        "binance": {"inflow": 1500, "outflow": 1200},
+        "coinbase": {"inflow": 800, "outflow": 750},
+        "kraken": {"inflow": 600, "outflow": 550}
+    }
 
-st.header("📊 Gráfico de Preço (Últimos 30 Dias")
-try:
-    # Gráfico de preço histórico
-    hist_url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=30"
-    hist_data = requests.get(hist_url).json()
-    df = pd.DataFrame(hist_data["prices"], columns=["timestamp", "price"])
-    df["date"] = pd.to_datetime(df["timestamp"], unit="ms")
-    fig = px.line(df, x="date", y="price", title="Preço do BTC")
-    st.plotly_chart(fig, use_container_width=True)
-except:
-    st.warning("Gráfico indisponível no momento")
+# ---- 4. DIFICULDADE DA REDE (CORREÇÃO) ----
+@st.cache_data(ttl=3600)
+def get_difficulty_data():
+    try:
+        # Nova fonte confiável para dados históricos
+        url = "https://api.blockchain.info/charts/difficulty?timespan=2years&format=json"
+        response = requests.get(url, timeout=15)
+        data = response.json()
+        df = pd.DataFrame(data["values"])
+        df["date"] = pd.to_datetime(df["x"], unit="s")
+        return df
+    except Exception as e:
+        st.error(f"Erro ao obter dificuldade: {str(e)}")
+        return pd.DataFrame(columns=["x", "y", "date"])
 
-# ---- DICAS RÁPIDAS ----
-st.header("💡 Interpretação Rápida")
-if data['hashrate'] > 500000 and data['price'] > 30000:
-    st.success("**Mercado Forte**: Hash rate alto e preço estável - bom momento para HODL")
-elif data['hashrate'] < 300000:
-    st.warning("**Cautela**: Hash rate baixo - rede menos segura")
-else:
-    st.info("**Mercado Neutro**: Aguarde mais sinais")
+# ---- CARREGAMENTO DE DADOS ----
+with st.spinner("Atualizando dados..."):
+    df_price = get_btc_price()
+    df_hashrate = get_hash_rate()
+    exchanges = get_exchange_flows()
+    df_difficulty = get_difficulty_data()
 
-# ---- ATUALIZAÇÃO ----
-if st.button("🔄 Atualizar Agora"):
+# ---- LAYOUT DO PAINEL (IGUAL À VERSÃO ANTERIOR) ----
+tab1, tab2, tab3 = st.tabs(["📈 Mercado", "🏦 Exchanges", "⚙️ Rede Bitcoin"])
+
+with tab1:
+    if not df_price.empty:
+        st.subheader("Preço do BTC (Últimos 90 dias)")
+        fig_price = px.line(df_price, x="date", y="price")
+        st.plotly_chart(fig_price, use_container_width=True)
+    
+    if not df_hashrate.empty:
+        st.subheader("Hash Rate (TH/s)")
+        fig_hash = px.line(df_hashrate, x="date", y="y")
+        st.plotly_chart(fig_hash, use_container_width=True)
+
+with tab2:
+    st.subheader("Fluxo de Exchanges (Simulado)")
+    df_exchanges = pd.DataFrame(exchanges).T
+    st.dataframe(df_exchanges.style.format("{:,.0f} BTC"))
+    
+    fig_flows = px.bar(
+        df_exchanges,
+        x=df_exchanges.index,
+        y=["inflow", "outflow"],
+        barmode="group",
+        title="Inflow vs Outflow"
+    )
+    st.plotly_chart(fig_flows, use_container_width=True)
+
+with tab3:
+    st.subheader("Dificuldade da Rede (Corrigido)")
+    if not df_difficulty.empty:
+        fig_diff = px.line(
+            df_difficulty,
+            x="date",
+            y="y",
+            title="Dificuldade de Mineração (Últimos 2 Anos)"
+        )
+        st.plotly_chart(fig_diff, use_container_width=True)
+    else:
+        st.info("Dados de dificuldade carregados parcialmente")
+
+# ---- RODAPÉ (MESMO DA VERSÃO ANTERIOR) ----
+st.sidebar.header("Configurações")
+if st.sidebar.button("Atualizar Dados"):
     st.cache_data.clear()
     st.rerun()
 
-st.caption("Dados atualizados a cada 10 minutos | Fontes: CoinGecko, Blockchain.com")
+st.sidebar.caption(f"Última atualização: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
