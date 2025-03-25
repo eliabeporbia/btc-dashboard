@@ -217,7 +217,12 @@ def generate_signals(data, rsi_window=14, bb_window=20):
         rsi_signal = "COMPRA" if rsi < 30 else "VENDA" if rsi > 70 else "NEUTRO"
         signals.append((f"RSI ({rsi_window})", rsi_signal, f"{rsi:.2f}"))
         
-        # 3. Bandas de Bollinger com janela personalizada
+        # 3. MACD
+        macd = data['prices']['MACD'].iloc[-1]
+        macd_signal = "COMPRA" if macd > 0 else "VENDA"
+        signals.append(("MACD", macd_signal, f"{macd:.2f}"))
+        
+        # 4. Bandas de Bollinger com janela personalizada
         bb_upper_col = f'BB_Upper_{bb_window}'
         bb_lower_col = f'BB_Lower_{bb_window}'
         if bb_upper_col not in data['prices']:
@@ -398,15 +403,78 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 ])
 
 with tab1:  # Mercado
-    if not data['prices'].empty:
-        # Mostrar apenas as médias móveis selecionadas
-        ma_cols = ['price'] + [f'MA{window}' for window in st.session_state.user_settings['ma_windows']]
-        fig = px.line(data['prices'], x="date", y=ma_cols, 
-                     title="Preço BTC e Médias Móveis")
-        st.plotly_chart(fig, use_container_width=True)
+    col1, col2 = st.columns([3, 2])
     
-    # Gráfico de Sentimento
-    st.subheader("📊 Sentimento do Mercado")
+    with col1:
+        if not data['prices'].empty:
+            # Mostrar apenas as médias móveis selecionadas
+            ma_cols = ['price'] + [f'MA{window}' for window in st.session_state.user_settings['ma_windows']]
+            fig = px.line(data['prices'], x="date", y=ma_cols, 
+                         title="Preço BTC e Médias Móveis")
+            st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        st.subheader("📊 Análise Técnica")
+        
+        # Container para os indicadores
+        indicators_container = st.container()
+        
+        with indicators_container:
+            # 1. Médias Móveis
+            for signal in signals:
+                if "MA" in signal[0] or "Preço vs" in signal[0]:
+                    color = "🟢" if signal[1] == "COMPRA" else "🔴" if signal[1] == "VENDA" else "🟡"
+                    st.markdown(f"{color} **{signal[0]}**: {signal[1]} ({signal[2]})")
+            
+            # 2. RSI
+            rsi_signal = next(s for s in signals if "RSI" in s[0])
+            rsi_color = "🟢" if rsi_signal[1] == "COMPRA" else "🔴" if rsi_signal[1] == "VENDA" else "🟡"
+            st.markdown(f"{rsi_color} **{rsi_signal[0]}**: {rsi_signal[1]} ({rsi_signal[2]})")
+            
+            # 3. MACD
+            macd_signal = next(s for s in signals if "MACD" in s[0])
+            macd_color = "🟢" if macd_signal[1] == "COMPRA" else "🔴"
+            st.markdown(f"{macd_color} **{macd_signal[0]}**: {macd_signal[1]} ({macd_signal[2]})")
+            
+            # 4. Bollinger Bands
+            bb_signal = next(s for s in signals if "Bollinger" in s[0])
+            bb_color = "🟢" if bb_signal[1] == "COMPRA" else "🔴" if bb_signal[1] == "VENDA" else "🟡"
+            st.markdown(f"{bb_color} **{bb_signal[0]}**: {bb_signal[1]} ({bb_signal[2]})")
+            
+            # 5. Fluxo de Exchanges
+            flow_signal = next(s for s in signals if "Fluxo" in s[0])
+            flow_color = "🟢" if flow_signal[1] == "COMPRA" else "🔴"
+            st.markdown(f"{flow_color} **{flow_signal[0]}**: {flow_signal[1]} ({flow_signal[2]})")
+            
+            # 6. Hashrate vs Dificuldade
+            hr_signal = next(s for s in signals if "Hashrate" in s[0])
+            hr_color = "🟢" if hr_signal[1] == "COMPRA" else "🔴"
+            st.markdown(f"{hr_color} **{hr_signal[0]}**: {hr_signal[1]} ({hr_signal[2]})")
+            
+            # 7. Atividade de Whales
+            whale_signal = next(s for s in signals if "Whales" in s[0])
+            whale_color = "🟢" if whale_signal[1] == "COMPRA" else "🔴"
+            st.markdown(f"{whale_color} **{whale_signal[0]}**: {whale_signal[1]} ({whale_signal[2]})")
+        
+        # Análise Final em destaque
+        st.divider()
+        st.subheader("📌 Análise Consolidada")
+        
+        if final_verdict == "✅ FORTE COMPRA":
+            st.success(f"## {final_verdict} ({buy_signals}/{len(signals)} indicadores)")
+        elif final_verdict == "❌ FORTE VENDA":
+            st.error(f"## {final_verdict} ({sell_signals}/{len(signals)} indicadores)")
+        elif "COMPRA" in final_verdict:
+            st.info(f"## {final_verdict} ({buy_signals}/{len(signals)} indicadores)")
+        elif "VENDA" in final_verdict:
+            st.warning(f"## {final_verdict} ({sell_signals}/{len(signals)} indicadores)")
+        else:
+            st.write(f"## {final_verdict}")
+        
+        st.caption(f"*Baseado na análise de {len(signals)} indicadores técnicos*")
+    
+    # Gráfico de Sentimento abaixo
+    st.subheader("📈 Sentimento do Mercado")
     fig_sent = go.Figure(go.Indicator(
         mode="gauge+number",
         value=sentiment['value'],
