@@ -1,6 +1,8 @@
 streamlit
-pandas
-numpy
-plotly
 requests
+pandas
+plotly
+numpy
 fpdf2
+scikit-learn
+yfinance
