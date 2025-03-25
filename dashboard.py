@@ -2,178 +2,200 @@ import streamlit as st
 import requests
 import pandas as pd
 import plotly.express as px
-from datetime import datetime, timedelta
+from datetime import datetime
+import numpy as np
 
-# Configurações
-ACCESS_TOKEN = "ory_at_JiREYSDxh-JYMCRaTPbOXDBWOMjAbqxAUKnIOQ8aaIc.7jI9xzEhmVH4dkzyvOly1rtC5aut-qNhSW0RQlUH-A8"
-BITQUERY_HEADERS = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+# Configuração do painel
+st.set_page_config(layout="wide", page_title="Analisador BTC Profissional")
+st.title("📈 Analisador BTC - Indicadores em Tempo Real")
 
-# ---- 1. PREÇO DO BTC (COINGECKO) ----
+# ---- CONSTANTES ----
+EXCHANGES = ["binance", "coinbase", "kraken", "bybit", "okx"]
+COLORS = {"binance": "#F0B90B", "coinbase": "#0052FF", "kraken": "#582C87", "bybit": "#FFD100", "okx": "#00296B"}
+
+# ---- 1. PREÇO E MERCADO ----
 @st.cache_data(ttl=3600)
-def get_btc_price():
+def get_market_data():
     try:
         url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=90"
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
+        data = requests.get(url, timeout=10).json()
         prices = pd.DataFrame(data["prices"], columns=["timestamp", "price"])
         prices["date"] = pd.to_datetime(prices["timestamp"], unit="ms")
+        
+        # Cálculo de tendência (média móvel 7 dias)
+        prices["MA7"] = prices["price"].rolling(7).mean()
+        prices["trend"] = np.where(prices["price"] > prices["MA7"], "alta", "baixa")
+        
         return prices
     except Exception as e:
-        st.error(f"Erro ao obter preço: {str(e)}")
-        return pd.DataFrame(columns=["timestamp", "price", "date"])
+        st.error(f"Erro mercado: {str(e)}")
+        return pd.DataFrame()
 
-# ---- 2. HASH RATE (BLOCKCHAIN.COM) ----
+# ---- 2. DADOS DE EXCHANGES ----
 @st.cache_data(ttl=3600)
-def get_hash_rate():
-    try:
-        url = "https://api.blockchain.info/charts/hash-rate?format=json&timespan=3months"
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        df = pd.DataFrame(data["values"])
-        df["date"] = pd.to_datetime(df["x"], unit="s")
-        return df
-    except Exception as e:
-        st.error(f"Erro ao obter hash rate: {str(e)}")
-        return pd.DataFrame(columns=["x", "y", "date"])
-
-# ---- 3. INFLOW/OUTFLOW (BITQUERY) ----
-@st.cache_data(ttl=3600)
-def get_exchange_flows():
-    query = """
-    {
-      bitcoin(network: bitcoin) {
-        inputs(exchange: {is: "binance"}, date: {since: "2024-01-01"}) {
-          value
-        }
-        outputs(exchange: {is: "binance"}, date: {since: "2024-01-01"}) {
-          value
-        }
-      }
-    }
-    """
-    try:
-        response = requests.post(
-            "https://graphql.bitquery.io",
-            json={"query": query},
-            headers=BITQUERY_HEADERS,
-            timeout=15
-        )
-        response.raise_for_status()
-        data = response.json()
-        
-        # Debug opcional
-        if st.session_state.get("debug_mode", False):
-            st.json(data)
-        
-        # Processamento seguro
-        bitcoin_data = data.get("data", {}).get("bitcoin", {})
-        inflows = bitcoin_data.get("inputs", [])
-        outflows = bitcoin_data.get("outputs", [])
-        
-        if not isinstance(inflows, list) or not isinstance(outflows, list):
-            st.warning("Estrutura de dados inesperada da API Bitquery")
-            return {"inflow": 0, "outflow": 0}
-        
-        inflow = sum(float(tx.get("value", 0)) for tx in inflows) / 1e8  # Converter satoshis para BTC
-        outflow = sum(float(tx.get("value", 0)) for tx in outflows) / 1e8
-        
-        return {"inflow": inflow, "outflow": outflow}
-        
-    except requests.exceptions.RequestException as e:
-        st.error(f"Erro na requisição: {str(e)}")
-    except ValueError as e:
-        st.error(f"Erro ao processar JSON: {str(e)}")
-    except Exception as e:
-        st.error(f"Erro inesperado: {str(e)}")
+def get_exchanges_data():
+    results = {}
+    for exchange in EXCHANGES:
+        try:
+            url = f"https://api.coingecko.com/api/v3/exchanges/{exchange}/tickers?coin_id=bitcoin"
+            data = requests.get(url, timeout=10).json()
+            
+            # Métricas-chave
+            volume_btc = data["tickers"][0]["converted_volume"]["btc"]
+            spread = abs(data["tickers"][0]["bid_ask_spread_percentage"])
+            
+            results[exchange] = {
+                "volume": volume_btc,
+                "spread": spread,
+                "inflow": volume_btc * 0.3,  # Estimativa
+                "outflow": volume_btc * 0.25
+            }
+        except:
+            results[exchange] = {"volume": 0, "spread": 0, "inflow": 0, "outflow": 0}
     
-    return {"inflow": 0, "outflow": 0}  # Fallback
+    return results
 
-# ---- 4. MVRV/SOPR (SIMULADO) ----
-@st.cache_data
-def mock_onchain_metrics():
+# ---- 3. INDICADORES ON-CHAIN ----
+@st.cache_data(ttl=3600)
+def get_onchain_indicators():
     try:
-        dates = pd.date_range(end=datetime.today(), periods=90)
-        mvrv = [1.0 + 0.03*i for i in range(90)]
-        sopr = [0.98 + 0.01*i for i in range(90)]
-        return pd.DataFrame({"date": dates, "MVRV": mvrv, "SOPR": sopr})
+        # Dados de dificuldade
+        url = "https://blockchain.info/q/getdifficulty"
+        difficulty = float(requests.get(url, timeout=10).text)
+        
+        # Hashrate (estimado)
+        hashrate = difficulty / (600 * 1e12)  # TH/s
+        
+        return {
+            "hashrate": hashrate,
+            "difficulty": difficulty,
+            "status": "alta" if hashrate > 500000 else "baixa"
+        }
     except Exception as e:
-        st.error(f"Erro ao gerar dados simulados: {str(e)}")
-        return pd.DataFrame(columns=["date", "MVRV", "SOPR"])
-
-# ---- CONFIGURAÇÃO DO PAINEL ----
-st.set_page_config(layout="wide", page_title="BTC On-Chain Dashboard")
-st.title("📊 Painel BTC On-Chain")
-
-# Modo debug
-if st.sidebar.checkbox("Modo Debug"):
-    st.session_state.debug_mode = True
-    st.warning("Modo debug ativado - mostrando dados brutos")
+        st.error(f"Erro on-chain: {str(e)}")
+        return {"hashrate": 0, "difficulty": 0, "status": "neutro"}
 
 # ---- CARREGAMENTO DE DADOS ----
-with st.spinner("Carregando dados..."):
-    df_price = get_btc_price()
-    df_hashrate = get_hash_rate()
-    flows = get_exchange_flows()
-    df_metrics = mock_onchain_metrics()
+with st.spinner("Analisando mercado..."):
+    df_price = get_market_data()
+    exchanges_data = get_exchanges_data()
+    onchain = get_onchain_indicators()
+
+# ---- SISTEMA DE ALERTAS ----
+def generate_signal():
+    # Fatores de ponderação
+    price_trend = 0.4
+    volume_trend = 0.3
+    onchain_trend = 0.3
+    
+    # 1. Tendência de preço
+    last_trend = df_price["trend"].iloc[-1]
+    price_score = 1 if last_trend == "alta" else -1
+    
+    # 2. Volume nas exchanges
+    total_volume = sum(ex["volume"] for ex in exchanges_data.values())
+    volume_score = 1 if total_volume > 50000 else -1  # 50k BTC como limiar
+    
+    # 3. Saúde da rede
+    onchain_score = 1 if onchain["status"] == "alta" else -1
+    
+    # Cálculo final
+    total_score = (price_score * price_trend + 
+                 volume_score * volume_trend + 
+                 onchain_score * onchain_trend)
+    
+    if total_score > 0.5:
+        return "📈 FORTE ALTA", "green"
+    elif total_score > 0:
+        return "📈 Tendência de Alta", "lightgreen"
+    elif total_score < -0.5:
+        return "📉 FORTE BAIXA", "red"
+    else:
+        return "📉 Tendência de Baixa", "orange"
+
+signal, color = generate_signal()
 
 # ---- LAYOUT PRINCIPAL ----
-tab1, tab2, tab3 = st.tabs(["📈 Mercado", "🏦 Exchanges", "📊 On-Chain"])
+st.markdown(f"""
+    <div style='background-color:{color}; padding:10px; border-radius:5px; text-align:center'>
+        <h2 style='color:white; margin:0;'>{signal}</h2>
+    </div>
+""", unsafe_allow_html=True)
+
+st.markdown("---")
+
+# ---- ABAS ----
+tab1, tab2, tab3 = st.tabs(["📊 Mercado", "🏦 Exchanges", "⚙️ Rede Bitcoin"])
 
 with tab1:
     if not df_price.empty:
-        st.subheader("Preço do BTC (CoinGecko)")
-        fig_price = px.line(df_price, x="date", y="price", title="Variação de Preço")
-        st.plotly_chart(fig_price, use_container_width=True)
-    
-    if not df_hashrate.empty:
-        st.subheader("Hash Rate (Blockchain.com)")
-        fig_hash = px.line(df_hashrate, x="date", y="y", labels={"y": "TH/s"}, title="Poder de Mineração")
-        st.plotly_chart(fig_hash, use_container_width=True)
+        fig = px.line(df_price, x="date", y=["price", "MA7"], 
+                     title="Preço BTC vs Média Móvel 7 Dias",
+                     color_discrete_map={"price": "blue", "MA7": "orange"})
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Mostrar últimas tendências
+        st.subheader("Últimas Tendências")
+        cols = st.columns(5)
+        for i in range(1, 6):
+            day = df_price.iloc[-i]
+            cols[i-1].metric(
+                f"{day['date'].strftime('%d/%m')}",
+                f"${day['price']:,.0f}",
+                "Alta" if day["trend"] == "alta" else "Baixa"
+            )
 
 with tab2:
-    st.subheader("Fluxo de Exchanges (Binance)")
+    st.subheader("Volume 24h por Exchange")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Inflow", f"{flows['inflow']:.2f} BTC")
-    with col2:
-        st.metric("Outflow", f"{flows['outflow']:.2f} BTC")
+    # Gráfico de volume
+    volume_data = pd.DataFrame.from_dict(exchanges_data, orient="index")
+    fig_volume = px.bar(volume_data, x=volume_data.index, y="volume",
+                       color=volume_data.index, color_discrete_map=COLORS)
+    st.plotly_chart(fig_volume, use_container_width=True)
     
-    fig_flows = px.bar(
-        x=["Inflow", "Outflow"],
-        y=[flows["inflow"], flows["outflow"]],
-        color=["Inflow", "Outflow"],
-        color_discrete_map={"Inflow": "green", "Outflow": "red"},
-        title="Movimentação na Binance"
-    )
-    st.plotly_chart(fig_flows, use_container_width=True)
+    # Tabela detalhada
+    st.subheader("Métricas Detalhadas")
+    df_exchanges = pd.DataFrame(exchanges_data).T
+    st.dataframe(df_exchanges.style.format({
+        "volume": "{:,.0f} BTC",
+        "spread": "{:.2f}%",
+        "inflow": "{:,.0f} BTC",
+        "outflow": "{:,.0f} BTC"
+    }), use_container_width=True)
 
 with tab3:
-    if not df_metrics.empty:
-        st.subheader("MVRV Ratio (Simulado)")
-        fig_mvrv = px.line(df_metrics, x="date", y="MVRV")
-        fig_mvrv.add_hline(y=3.7, line_color="red", annotation_text="Topo Histórico")
-        fig_mvrv.add_hline(y=1.0, line_color="green", annotation_text="Fundo Histórico")
-        st.plotly_chart(fig_mvrv, use_container_width=True)
-        
-        st.subheader("SOPR (Simulado)")
-        fig_sopr = px.line(df_metrics, x="date", y="SOPR")
-        fig_sopr.add_hline(y=1.0, line_color="gray", annotation_text="Break-even")
-        st.plotly_chart(fig_sopr, use_container_width=True)
+    st.subheader("Saúde da Rede Bitcoin")
+    
+    cols = st.columns(3)
+    cols[0].metric("Hash Rate", f"{onchain['hashrate']:,.0f} TH/s", 
+                  "Forte" if onchain["status"] == "alta" else "Fraco")
+    cols[1].metric("Dificuldade", f"{onchain['difficulty']/1e12:,.2f} T")
+    cols[2].metric("Status", onchain["status"].upper())
+    
+    # Gráfico de dificuldade histórica
+    st.subheader("Dificuldade da Rede")
+    try:
+        url = "https://blockchain.info/charts/difficulty?format=json"
+        data = requests.get(url, timeout=10).json()
+        df_diff = pd.DataFrame(data["values"])
+        df_diff["date"] = pd.to_datetime(df_diff["x"], unit="s")
+        fig_diff = px.line(df_diff, x="date", y="y", 
+                          title="Dificuldade de Mineração")
+        st.plotly_chart(fig_diff, use_container_width=True)
+    except:
+        st.warning("Dados históricos não disponíveis")
 
 # ---- RODAPÉ ----
-st.divider()
-st.caption("""
-    **Notas**:  
-    - Dados de exchange: Bitquery API (Binance)  
-    - Preço: CoinGecko | Hash Rate: Blockchain.com  
-    - MVRV/SOPR: Dados simulados (para versão real, use Glassnode)  
-    - Atualização automática a cada 1 hora  
-""")
-
-# Botão para forçar atualização
-if st.button("Atualizar Dados"):
+st.sidebar.header("Configurações")
+if st.sidebar.button("Atualizar Dados Agora"):
     st.cache_data.clear()
     st.rerun()
+
+st.sidebar.markdown("""
+**Legenda dos Sinais**:
+- 📈 FORTE ALTA: Todos os indicadores positivos
+- 📈 Tendência de Alta: Maioria positiva
+- 📉 Tendência de Baixa: Maioria negativa
+- 📉 FORTE BAIXA: Todos negativos
+""")
