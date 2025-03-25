@@ -83,13 +83,19 @@ def get_traditional_assets():
         dfs.append(data)
     return pd.concat(dfs)
 
-def backtest_strategy(data):
+def backtest_strategy(data, rsi_window=14):
     """Backtesting automático baseado em RSI e Médias"""
     df = data['prices'].copy()
     
+    # Calcular RSI com período personalizado
+    rsi_col = f'RSI_{rsi_window}'
+    if rsi_col not in df:
+        df[rsi_col] = calculate_rsi(df['price'], rsi_window)
+    
     # Estratégia: Compra quando RSI < 30 e preço abaixo da média móvel
-    df['signal'] = np.where((df['RSI'] < 30) & (df['price'] < df['MA30']), 1, 
-                          np.where((df['RSI'] > 70) & (df['price'] > df['MA30']), -1, 0))
+    df['signal'] = np.where(
+        (df[rsi_col] < 30) & (df['price'] < df['MA30']), 1, 
+        np.where((df[rsi_col] > 70) & (df['price'] > df['MA30']), -1, 0))
     
     df['daily_return'] = df['price'].pct_change()
     df['strategy_return'] = df['signal'].shift(1) * df['daily_return']
@@ -125,14 +131,14 @@ def load_data():
         data['prices'] = pd.DataFrame(market_data["prices"], columns=["timestamp", "price"])
         data['prices']["date"] = pd.to_datetime(data['prices']["timestamp"], unit="ms")
         
-        # Calculando todos os indicadores técnicos
+        # Calculando todos os indicadores técnicos básicos
         price_series = data['prices']['price']
         data['prices']['MA7'] = price_series.rolling(7).mean()
         data['prices']['MA30'] = price_series.rolling(30).mean()
         data['prices']['MA200'] = price_series.rolling(200).mean()
-        data['prices']['RSI'] = calculate_rsi(price_series)
+        data['prices']['RSI_14'] = calculate_rsi(price_series, 14)  # RSI padrão
         data['prices']['MACD'], data['prices']['MACD_Signal'] = calculate_macd(price_series)
-        data['prices']['BB_Upper'], data['prices']['BB_Lower'] = calculate_bollinger_bands(price_series)
+        data['prices']['BB_Upper_20'], data['prices']['BB_Lower_20'] = calculate_bollinger_bands(price_series, 20)
         
         # Hashrate (taxa de hash)
         hr_response = requests.get("https://api.blockchain.info/charts/hash-rate?format=json&timespan=3months", timeout=10)
@@ -170,7 +176,7 @@ def load_data():
 # GERADOR DE SINAIS
 # ======================
 
-def generate_signals(data):
+def generate_signals(data, rsi_window=14, bb_window=20):
     signals = []
     buy_signals = 0
     sell_signals = 0
@@ -178,13 +184,21 @@ def generate_signals(data):
     if not data['prices'].empty:
         last_price = data['prices']['price'].iloc[-1]
         
-        # 1. Sinais de Médias Móveis
-        ma_signals = [
-            ("Preço vs MA7", data['prices']['MA7'].iloc[-1]),
-            ("Preço vs MA30", data['prices']['MA30'].iloc[-1]),
-            ("Preço vs MA200", data['prices']['MA200'].iloc[-1]),
-            ("MA7 vs MA30", data['prices']['MA7'].iloc[-1], data['prices']['MA30'].iloc[-1])
-        ]
+        # 1. Sinais de Médias Móveis (usando as médias selecionadas)
+        ma_signals = []
+        for window in st.session_state.user_settings['ma_windows']:
+            col_name = f'MA{window}'
+            if col_name not in data['prices']:
+                data['prices'][col_name] = data['prices']['price'].rolling(window).mean()
+            ma_signals.append((f"Preço vs MA{window}", data['prices'][col_name].iloc[-1]))
+        
+        # Adicionar comparação entre médias
+        if len(st.session_state.user_settings['ma_windows']) > 1:
+            ma1 = st.session_state.user_settings['ma_windows'][0]
+            ma2 = st.session_state.user_settings['ma_windows'][1]
+            ma_signals.append((f"MA{ma1} vs MA{ma2}", 
+                             data['prices'][f'MA{ma1}'].iloc[-1], 
+                             data['prices'][f'MA{ma2}'].iloc[-1]))
         
         for name, *values in ma_signals:
             if len(values) == 1:
@@ -195,21 +209,25 @@ def generate_signals(data):
                 change = (values[0]/values[1] - 1)
             signals.append((name, signal, f"{change:.2%}"))
         
-        # 2. RSI
-        rsi = data['prices']['RSI'].iloc[-1]
+        # 2. RSI com período personalizado
+        rsi_col = f'RSI_{rsi_window}'
+        if rsi_col not in data['prices']:
+            data['prices'][rsi_col] = calculate_rsi(data['prices']['price'], rsi_window)
+        rsi = data['prices'][rsi_col].iloc[-1]
         rsi_signal = "COMPRA" if rsi < 30 else "VENDA" if rsi > 70 else "NEUTRO"
-        signals.append(("RSI (14)", rsi_signal, f"{rsi:.2f}"))
+        signals.append((f"RSI ({rsi_window})", rsi_signal, f"{rsi:.2f}"))
         
-        # 3. MACD
-        macd = data['prices']['MACD'].iloc[-1]
-        macd_signal = "COMPRA" if macd > 0 else "VENDA"
-        signals.append(("MACD", macd_signal, f"{macd:.2f}"))
+        # 3. Bandas de Bollinger com janela personalizada
+        bb_upper_col = f'BB_Upper_{bb_window}'
+        bb_lower_col = f'BB_Lower_{bb_window}'
+        if bb_upper_col not in data['prices']:
+            data['prices'][bb_upper_col], data['prices'][bb_lower_col] = calculate_bollinger_bands(
+                data['prices']['price'], window=bb_window)
         
-        # 4. Bandas de Bollinger
-        bb_upper = data['prices']['BB_Upper'].iloc[-1]
-        bb_lower = data['prices']['BB_Lower'].iloc[-1]
+        bb_upper = data['prices'][bb_upper_col].iloc[-1]
+        bb_lower = data['prices'][bb_lower_col].iloc[-1]
         bb_signal = "COMPRA" if last_price < bb_lower else "VENDA" if last_price > bb_upper else "NEUTRO"
-        signals.append(("Bollinger Bands", bb_signal, f"Atual: ${last_price:,.0f}"))
+        signals.append((f"Bollinger Bands ({bb_window})", bb_signal, f"Atual: ${last_price:,.0f}"))
     
     # 5. Fluxo de exchanges
     if data['exchanges']:
@@ -254,21 +272,21 @@ def generate_signals(data):
 
 # Carregar dados
 data = load_data()
-signals, final_verdict, buy_signals, sell_signals = generate_signals(data)
-sentiment = get_market_sentiment()
-traditional_assets = get_traditional_assets()
 
-# Sidebar - Controles do Usuário
-st.sidebar.header("⚙️ Painel de Controle")
+# Configurações padrão
+DEFAULT_SETTINGS = {
+    'rsi_window': 14,
+    'bb_window': 20,
+    'ma_windows': [7, 30, 200],
+    'email': ''
+}
 
 # Inicializar session_state para configurações
 if 'user_settings' not in st.session_state:
-    st.session_state.user_settings = {
-        'rsi_window': 14,
-        'bb_window': 20,
-        'ma_windows': [7, 30, 200],
-        'email': ''
-    }
+    st.session_state.user_settings = DEFAULT_SETTINGS.copy()
+
+# Sidebar - Controles do Usuário
+st.sidebar.header("⚙️ Painel de Controle")
 
 # Configurações dos indicadores
 st.sidebar.subheader("🔧 Parâmetros Técnicos")
@@ -299,30 +317,46 @@ email = st.sidebar.text_input(
     st.session_state.user_settings['email']
 )
 
-# Botão para salvar configurações
-if st.sidebar.button("💾 Salvar Configurações"):
-    st.session_state.user_settings = {
-        'rsi_window': rsi_window,
-        'bb_window': bb_window,
-        'ma_windows': ma_windows,
-        'email': email
-    }
-    st.sidebar.success("Configurações salvas com sucesso!")
+# Botões de controle
+col1, col2 = st.sidebar.columns(2)
+with col1:
+    if st.button("💾 Salvar Configurações"):
+        st.session_state.user_settings = {
+            'rsi_window': rsi_window,
+            'bb_window': bb_window,
+            'ma_windows': ma_windows,
+            'email': email
+        }
+        st.sidebar.success("Configurações salvas com sucesso!")
+        
+with col2:
+    if st.button("🔄 Resetar"):
+        st.session_state.user_settings = DEFAULT_SETTINGS.copy()
+        st.sidebar.success("Configurações resetadas para padrão!")
+        st.experimental_rerun()
 
 if st.sidebar.button("Ativar Monitoramento Contínuo"):
     st.sidebar.success("Alertas ativados!")
 
+# Gerar sinais com configurações atuais
+signals, final_verdict, buy_signals, sell_signals = generate_signals(
+    data, 
+    rsi_window=st.session_state.user_settings['rsi_window'],
+    bb_window=st.session_state.user_settings['bb_window']
+)
+
+sentiment = get_market_sentiment()
+traditional_assets = get_traditional_assets()
+
 # Seção principal
 st.header("📊 Painel Integrado BTC Pro+")
 
-# Linha de métricas (ATUALIZADA COM PORCENTAGENS)
+# Linha de métricas
 col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Preço BTC", f"${data['prices']['price'].iloc[-1]:,.2f}")
-
-# Sentimento (mantido igual)
 col2.metric("Sentimento", f"{sentiment['value']}/100", sentiment['sentiment'])
 
-# S&P 500 com % (NOVO)
+# S&P 500 com %
 sp500_data = traditional_assets[traditional_assets['asset']=='S&P 500']
 sp500_value = sp500_data['value'].iloc[-1]
 sp500_prev = sp500_data['value'].iloc[-2] if len(sp500_data) > 1 else sp500_value
@@ -334,7 +368,7 @@ col3.metric(
     delta_color="normal"
 )
 
-# Ouro com % (NOVO)
+# Ouro com %
 ouro_data = traditional_assets[traditional_assets['asset']=='Ouro']
 ouro_value = ouro_data['value'].iloc[-1]
 ouro_prev = ouro_data['value'].iloc[-2] if len(ouro_data) > 1 else ouro_value
@@ -346,10 +380,10 @@ col4.metric(
     delta_color="normal"
 )
 
-# Análise Final (mantido igual)
+# Análise Final
 col5.metric("Análise Final", final_verdict)
 
-# Abas principais (MANTIDAS ORIGINAIS)
+# Abas principais
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📈 Mercado", 
     "🆚 Comparativos", 
@@ -361,7 +395,9 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 
 with tab1:  # Mercado
     if not data['prices'].empty:
-        fig = px.line(data['prices'], x="date", y=["price", "MA7", "MA30", "MA200"], 
+        # Mostrar apenas as médias móveis selecionadas
+        ma_cols = ['price'] + [f'MA{window}' for window in st.session_state.user_settings['ma_windows']]
+        fig = px.line(data['prices'], x="date", y=ma_cols, 
                      title="Preço BTC e Médias Móveis")
         st.plotly_chart(fig, use_container_width=True)
     
@@ -393,7 +429,7 @@ with tab2:  # Comparativos
 
 with tab3:  # Backtesting
     st.subheader("🧪 Backtesting Estratégico")
-    bt_data = backtest_strategy(data)
+    bt_data = backtest_strategy(data, rsi_window=st.session_state.user_settings['rsi_window'])
     
     col1, col2 = st.columns(2)
     with col1:
@@ -421,7 +457,6 @@ with tab4:  # Cenários
     simulated_prices = simulate_event(
         event, 
         data['prices']['price'].tail(90).reset_index(drop=True)
-    )
     
     fig_scenario = go.Figure()
     fig_scenario.add_trace(go.Scatter(
@@ -438,28 +473,55 @@ with tab4:  # Cenários
 
 with tab5:  # Técnico
     if not data['prices'].empty:
-        # Gráfico RSI
-        fig_rsi = px.line(data['prices'], x="date", y="RSI", 
-                         title="RSI (14 dias)", 
+        # Gráfico RSI com período personalizado
+        rsi_window = st.session_state.user_settings['rsi_window']
+        rsi_col = f'RSI_{rsi_window}'
+        if rsi_col not in data['prices']:
+            data['prices'][rsi_col] = calculate_rsi(data['prices']['price'], rsi_window)
+        
+        fig_rsi = px.line(data['prices'], x="date", y=rsi_col, 
+                         title=f"RSI ({rsi_window} dias)", 
                          range_y=[0, 100])
         fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
         fig_rsi.add_hline(y=70, line_dash="dash", line_color="red")
         st.plotly_chart(fig_rsi, use_container_width=True)
         
-        # Gráfico MACD
+        # Gráfico Bollinger Bands com janela personalizada
+        bb_window = st.session_state.user_settings['bb_window']
+        bb_upper_col = f'BB_Upper_{bb_window}'
+        bb_lower_col = f'BB_Lower_{bb_window}'
+        if bb_upper_col not in data['prices']:
+            data['prices'][bb_upper_col], data['prices'][bb_lower_col] = calculate_bollinger_bands(
+                data['prices']['price'], window=bb_window)
+        
+        fig_bb = go.Figure()
+        fig_bb.add_trace(go.Scatter(
+            x=data['prices']['date'], 
+            y=data['prices'][bb_upper_col], 
+            name="Banda Superior"))
+        fig_bb.add_trace(go.Scatter(
+            x=data['prices']['date'], 
+            y=data['prices']['price'], 
+            name="Preço"))
+        fig_bb.add_trace(go.Scatter(
+            x=data['prices']['date'], 
+            y=data['prices'][bb_lower_col], 
+            name="Banda Inferior"))
+        fig_bb.update_layout(title=f"Bandas de Bollinger ({bb_window},2)")
+        st.plotly_chart(fig_bb, use_container_width=True)
+        
+        # Gráfico MACD (mantido padrão)
         fig_macd = go.Figure()
-        fig_macd.add_trace(go.Scatter(x=data['prices']['date'], y=data['prices']['MACD'], name="MACD"))
-        fig_macd.add_trace(go.Scatter(x=data['prices']['date'], y=data['prices']['MACD_Signal'], name="Signal"))
+        fig_macd.add_trace(go.Scatter(
+            x=data['prices']['date'], 
+            y=data['prices']['MACD'], 
+            name="MACD"))
+        fig_macd.add_trace(go.Scatter(
+            x=data['prices']['date'], 
+            y=data['prices']['MACD_Signal'], 
+            name="Signal"))
         fig_macd.update_layout(title="MACD (12,26,9)")
         st.plotly_chart(fig_macd, use_container_width=True)
-        
-        # Gráfico Bollinger Bands
-        fig_bb = go.Figure()
-        fig_bb.add_trace(go.Scatter(x=data['prices']['date'], y=data['prices']['BB_Upper'], name="Banda Superior"))
-        fig_bb.add_trace(go.Scatter(x=data['prices']['date'], y=data['prices']['price'], name="Preço"))
-        fig_bb.add_trace(go.Scatter(x=data['prices']['date'], y=data['prices']['BB_Lower'], name="Banda Inferior"))
-        fig_bb.update_layout(title="Bandas de Bollinger (20,2)")
-        st.plotly_chart(fig_bb, use_container_width=True)
 
 with tab6:  # Exportar
     st.subheader("📤 Exportar Dados Completo")
@@ -473,6 +535,10 @@ with tab6:  # Exportar
         # Adicionar conteúdo
         pdf.cell(200, 10, txt=f"Preço Atual: ${data['prices']['price'].iloc[-1]:,.2f}", ln=1)
         pdf.cell(200, 10, txt=f"Sinal Atual: {final_verdict}", ln=1)
+        pdf.cell(200, 10, txt=f"Configurações:", ln=1)
+        pdf.cell(200, 10, txt=f"- Período RSI: {st.session_state.user_settings['rsi_window']}", ln=1)
+        pdf.cell(200, 10, txt=f"- BB Window: {st.session_state.user_settings['bb_window']}", ln=1)
+        pdf.cell(200, 10, txt=f"- Médias Móveis: {', '.join(map(str, st.session_state.user_settings['ma_windows']))}", ln=1)
         
         # Salvar temporariamente
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
