@@ -7,46 +7,11 @@ from datetime import datetime, timedelta
 import numpy as np
 from fpdf import FPDF
 
-# ======================
-# FUNÇÕES DE CÁLCULO
-# ======================
+# Configuração do painel
+st.set_page_config(layout="wide", page_title="BTC Super Dashboard Pro")
+st.title("🚀 BTC Super Dashboard Pro - Análise Avançada")
 
-def calculate_ema(series, window):
-    """Calcula a Média Móvel Exponencial"""
-    return series.ewm(span=window, adjust=False).mean()
-
-def calculate_rsi(series, window=14):
-    """Calcula o Relative Strength Index (RSI)"""
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    
-    avg_gain = gain.rolling(window).mean()
-    avg_loss = loss.rolling(window).mean()
-    
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-def calculate_macd(series, fast=12, slow=26, signal=9):
-    """Calcula o MACD com linhas de sinal"""
-    ema_fast = calculate_ema(series, fast)
-    ema_slow = calculate_ema(series, slow)
-    macd = ema_fast - ema_slow
-    signal_line = calculate_ema(macd, signal)
-    return macd, signal_line
-
-def calculate_bollinger_bands(series, window=20, num_std=2):
-    """Calcula as Bandas de Bollinger"""
-    sma = series.rolling(window).mean()
-    std = series.rolling(window).std()
-    upper = sma + (std * num_std)
-    lower = sma - (std * num_std)
-    return upper, lower
-
-# ======================
-# CARREGAMENTO DE DADOS
-# ======================
-
+# ---- 1. FUNÇÕES PRINCIPAIS ----
 @st.cache_data(ttl=3600)
 def load_data():
     data = {}
@@ -59,15 +24,8 @@ def load_data():
         
         data['prices'] = pd.DataFrame(market_data["prices"], columns=["timestamp", "price"])
         data['prices']["date"] = pd.to_datetime(data['prices']["timestamp"], unit="ms")
-        
-        # Calculando indicadores
-        price_series = data['prices']['price']
-        data['prices']['MA7'] = price_series.rolling(7).mean()
-        data['prices']['MA30'] = price_series.rolling(30).mean()
-        data['prices']['MA200'] = price_series.rolling(200).mean()
-        data['prices']['RSI'] = calculate_rsi(price_series)
-        data['prices']['MACD'], data['prices']['MACD_Signal'] = calculate_macd(price_series)
-        data['prices']['BB_Upper'], data['prices']['BB_Lower'] = calculate_bollinger_bands(price_series)
+        data['prices']['MA7'] = data['prices']['price'].rolling(7).mean()
+        data['prices']['MA30'] = data['prices']['price'].rolling(30).mean()
         
         # Hashrate
         hr_response = requests.get("https://api.blockchain.info/charts/hash-rate?format=json&timespan=3months", timeout=10)
@@ -81,19 +39,12 @@ def load_data():
         data['difficulty'] = pd.DataFrame(diff_response.json()["values"])
         data['difficulty']["date"] = pd.to_datetime(data['difficulty']["x"], unit="s")
         
-        # Dados de exchanges (simulados)
+        # Dados de exchanges (simulados + real)
         data['exchanges'] = {
             "binance": {"inflow": 1500, "outflow": 1200, "reserves": 500000},
             "coinbase": {"inflow": 800, "outflow": 750, "reserves": 350000},
             "kraken": {"inflow": 600, "outflow": 550, "reserves": 200000}
         }
-        
-        # Dados de whale alerts (simulado)
-        data['whale_alert'] = pd.DataFrame({
-            "date": [datetime.now() - timedelta(hours=h) for h in [1, 3, 5, 8, 12]],
-            "amount": [250, 180, 120, 300, 150],
-            "exchange": ["Binance", "Coinbase", "Kraken", "Binance", "FTX"]
-        })
         
     except requests.exceptions.RequestException as e:
         st.error(f"Erro na requisição à API: {str(e)}")
@@ -101,86 +52,33 @@ def load_data():
         st.error(f"Erro ao processar dados: {str(e)}")
     return data
 
-# ======================
-# GERADOR DE SINAIS
-# ======================
-
 def generate_signals(data):
     signals = []
-    buy_signals = 0
-    sell_signals = 0
     
+    # 1. Tendência de preço (Médias Móveis)
     if not data['prices'].empty:
         last_price = data['prices']['price'].iloc[-1]
-        
-        # 1. Médias Móveis
         ma7 = data['prices']['MA7'].iloc[-1]
         ma30 = data['prices']['MA30'].iloc[-1]
-        ma200 = data['prices']['MA200'].iloc[-1]
         
         signals.append(("Preço vs MA7", "COMPRA" if last_price > ma7 else "VENDA", f"{(last_price/ma7 - 1):.2%}"))
         signals.append(("Preço vs MA30", "COMPRA" if last_price > ma30 else "VENDA", f"{(last_price/ma30 - 1):.2%}"))
         signals.append(("MA7 vs MA30", "COMPRA" if ma7 > ma30 else "VENDA", f"{(ma7/ma30 - 1):.2%}"))
-        signals.append(("Preço vs MA200", "COMPRA" if last_price > ma200 else "VENDA", f"{(last_price/ma200 - 1):.2%}"))
-        
-        # 2. RSI
-        rsi = data['prices']['RSI'].iloc[-1]
-        rsi_signal = "COMPRA" if rsi < 30 else "VENDA" if rsi > 70 else "NEUTRO"
-        signals.append(("RSI (14)", rsi_signal, f"{rsi:.2f}"))
-        
-        # 3. MACD
-        macd = data['prices']['MACD'].iloc[-1]
-        macd_signal = "COMPRA" if macd > 0 else "VENDA"
-        signals.append(("MACD", macd_signal, f"{macd:.2f}"))
-        
-        # 4. Bandas de Bollinger
-        bb_upper = data['prices']['BB_Upper'].iloc[-1]
-        bb_lower = data['prices']['BB_Lower'].iloc[-1]
-        bb_signal = "COMPRA" if last_price < bb_lower else "VENDA" if last_price > bb_upper else "NEUTRO"
-        signals.append(("Bollinger Bands", bb_signal, f"Atual: ${last_price:,.0f} | Superior: ${bb_upper:,.0f} | Inferior: ${bb_lower:,.0f}"))
     
-    # 5. Fluxo de exchanges
+    # 2. Fluxo de exchanges
     if data['exchanges']:
         net_flows = sum(ex["inflow"] - ex["outflow"] for ex in data['exchanges'].values())
-        flow_signal = "COMPRA" if net_flows < 0 else "VENDA"
-        signals.append(("Net Flow Exchanges", flow_signal, f"{net_flows:,} BTC"))
+        signals.append(("Net Flow Exchanges", "COMPRA" if net_flows < 0 else "VENDA", f"{net_flows:,} BTC"))
     
-    # 6. Hashrate vs Dificuldade
+    # 3. Hashrate vs Dificuldade
     if not data['hashrate'].empty and not data['difficulty'].empty:
         hr_growth = data['hashrate']['y'].iloc[-1] / data['hashrate']['y'].iloc[-30] - 1
         diff_growth = data['difficulty']['y'].iloc[-1] / data['difficulty']['y'].iloc[-30] - 1
-        hr_signal = "COMPRA" if hr_growth > diff_growth else "VENDA"
-        signals.append(("Hashrate vs Dificuldade", hr_signal, f"{(hr_growth - diff_growth):.2%}"))
+        signals.append(("Hashrate vs Dificuldade", "COMPRA" if hr_growth > diff_growth else "VENDA", f"{(hr_growth - diff_growth):.2%}"))
     
-    # 7. Whale Activity
-    if 'whale_alert' in data and not data['whale_alert'].empty:
-        whale_ratio = data['whale_alert']['amount'].sum() / (24*30)
-        whale_signal = "COMPRA" if whale_ratio < 100 else "VENDA"
-        signals.append(("Atividade de Whales", whale_signal, f"{whale_ratio:.1f} BTC/dia"))
-    
-    # Contagem de sinais
-    buy_signals = sum(1 for s in signals if s[1] == "COMPRA")
-    sell_signals = sum(1 for s in signals if s[1] == "VENDA")
-    
-    # Análise consolidada
-    if buy_signals >= sell_signals + 3:
-        final_verdict = "✅ FORTE COMPRA"
-    elif buy_signals > sell_signals:
-        final_verdict = "📈 COMPRA"
-    elif sell_signals >= buy_signals + 3:
-        final_verdict = "❌ FORTE VENDA"
-    elif sell_signals > buy_signals:
-        final_verdict = "📉 VENDA"
-    else:
-        final_verdict = "➖ NEUTRO"
-    
-    return signals, final_verdict, buy_signals, sell_signals
+    return signals
 
-# ======================
-# GERADOR DE PDF
-# ======================
-
-def generate_pdf(data, signals, final_verdict):
+def generate_pdf(data, signals):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
@@ -195,16 +93,10 @@ def generate_pdf(data, signals, final_verdict):
     pdf.cell(200, 10, txt=f"Hashrate: {data['hashrate']['y'].iloc[-1]/1e6:,.1f} EH/s", ln=1)
     pdf.cell(200, 10, txt=f"Dificuldade: {data['difficulty']['y'].iloc[-1]/1e12:,.1f} T", ln=1)
     
-    # Veredito final
-    pdf.ln(5)
-    pdf.set_font("Arial", 'B', 14)
-    pdf.cell(200, 10, txt=f"Análise Final: {final_verdict}", ln=1)
-    pdf.set_font("Arial", size=12)
-    
     # Sinais
-    pdf.ln(5)
+    pdf.ln(10)
     pdf.set_font("Arial", 'B', 14)
-    pdf.cell(200, 10, txt="Sinais Detalhados:", ln=1)
+    pdf.cell(200, 10, txt="Sinais de Mercado:", ln=1)
     pdf.set_font("Arial", size=12)
     
     for name, signal, value in signals:
@@ -213,109 +105,85 @@ def generate_pdf(data, signals, final_verdict):
     pdf.output("report.pdf")
     return open("report.pdf", "rb")
 
-# ======================
-# INTERFACE DO USUÁRIO
-# ======================
-
-# Carregar dados
+# ---- 2. CARREGAMENTO DE DADOS ----
 data = load_data()
-if data and not data['prices'].empty:
-    signals, final_verdict, buy_signals, sell_signals = generate_signals(data)
-else:
-    signals = []
-    final_verdict = "Dados indisponíveis"
+signals = generate_signals(data) if data else []
 
-# Layout principal
+# ---- 3. LAYOUT DO PAINEL ----
 st.header("📢 Status do Mercado", divider="rainbow")
 
-# Métricas rápidas
-col1, col2, col3, col4 = st.columns(4)
+# Área de status
+col1, col2, col3 = st.columns(3)
 col1.metric("Preço Atual", f"${data['prices']['price'].iloc[-1]:,.2f}" if not data['prices'].empty else "N/A")
 col2.metric("Hash Rate", f"{data['hashrate']['y'].iloc[-1]/1e6:,.1f} EH/s" if not data['hashrate'].empty else "N/A")
 col3.metric("Dificuldade", f"{data['difficulty']['y'].iloc[-1]/1e12:,.1f} T" if not data['difficulty'].empty else "N/A")
-col4.metric("Análise Final", final_verdict)
 
 # Tabela de sinais
-st.subheader(f"📊 Resumo de Sinais (COMPRA: {buy_signals} | VENDA: {sell_signals})")
-
+st.subheader("📈 Sinais de Compra/Venda")
 if signals:
     df_signals = pd.DataFrame(signals, columns=["Indicador", "Sinal", "Valor"])
-    
-    def color_signal(val):
-        color = '#4CAF50' if val == "COMPRA" else '#F44336' if val == "VENDA" else '#FFC107'
-        return f'background-color: {color}'
-    
     st.dataframe(
-        df_signals.style.applymap(color_signal, subset=["Sinal"]),
+        df_signals.style.applymap(
+            lambda x: "background-color: #4CAF50" if x == "COMPRA" else "background-color: #F44336", 
+            subset=["Sinal"]
+        ),
         hide_index=True,
-        use_container_width=True,
-        height=(len(df_signals) * 35 + 38)
+        use_container_width=True
     )
 else:
     st.warning("Não foi possível gerar sinais. Verifique os dados.")
 
-# Abas com gráficos
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Mercado", "📈 Técnico", "🏦 Exchanges", "🐳 Whales", "📑 Relatório"])
+# Gráficos e abas
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Mercado", "🏦 Exchanges", "⛏️ Mineração", "📑 Relatório"])
 
 with tab1:
     if not data['prices'].empty:
-        fig = px.line(data['prices'], x="date", y=["price", "MA7", "MA30", "MA200"], 
+        fig = px.line(data['prices'], x="date", y=["price", "MA7", "MA30"], 
                      title="Preço BTC e Médias Móveis")
         st.plotly_chart(fig, use_container_width=True)
 
 with tab2:
-    if not data['prices'].empty:
-        # Gráfico RSI
-        fig_rsi = px.line(data['prices'], x="date", y="RSI", title="RSI (14 dias)", range_y=[0, 100])
-        fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
-        fig_rsi.add_hline(y=70, line_dash="dash", line_color="red")
-        st.plotly_chart(fig_rsi, use_container_width=True)
-        
-        # Gráfico MACD
-        fig_macd = go.Figure()
-        fig_macd.add_trace(go.Scatter(x=data['prices']['date'], y=data['prices']['MACD'], name="MACD"))
-        fig_macd.add_trace(go.Scatter(x=data['prices']['date'], y=data['prices']['MACD_Signal'], name="Signal"))
-        fig_macd.update_layout(title="MACD (12,26,9)")
-        st.plotly_chart(fig_macd, use_container_width=True)
-        
-        # Gráfico Bollinger Bands
-        fig_bb = go.Figure()
-        fig_bb.add_trace(go.Scatter(x=data['prices']['date'], y=data['prices']['BB_Upper'], name="Banda Superior"))
-        fig_bb.add_trace(go.Scatter(x=data['prices']['date'], y=data['prices']['price'], name="Preço"))
-        fig_bb.add_trace(go.Scatter(x=data['prices']['date'], y=data['prices']['BB_Lower'], name="Banda Inferior"))
-        fig_bb.update_layout(title="Bandas de Bollinger (20,2)")
-        st.plotly_chart(fig_bb, use_container_width=True)
-
-with tab3:
     if data['exchanges']:
         df_exchanges = pd.DataFrame(data['exchanges']).T
         fig = px.bar(df_exchanges, y=["inflow", "outflow"], barmode="group", 
                      title="Fluxo de Exchanges (BTC)")
         st.plotly_chart(fig, use_container_width=True)
 
-with tab4:
-    if 'whale_alert' in data and not data['whale_alert'].empty:
-        fig = px.bar(data['whale_alert'], x="date", y="amount", color="exchange",
-                     title="Atividade de Whales (últimas 24h)")
+with tab3:
+    if not data['hashrate'].empty and not data['difficulty'].empty:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=data['hashrate']['date'], y=data['hashrate']['y']/1e6, 
+                       name="Hashrate (EH/s)"))
+        fig.add_trace(go.Scatter(x=data['difficulty']['date'], y=data['difficulty']['y']/1e12, 
+                       name="Dificuldade (T)", yaxis="y2"))
+        fig.update_layout(
+            title="Hashrate vs Dificuldade",
+            yaxis=dict(title="Hashrate (EH/s)"),
+            yaxis2=dict(title="Dificuldade (T)", overlaying="y", side="right")
+        )
         st.plotly_chart(fig, use_container_width=True)
 
-with tab5:
-    st.subheader("📑 Relatório Completo")
-    if st.button("🖨️ Gerar Relatório PDF"):
+with tab4:
+    st.subheader("📑 Gerar Relatório Completo")
+    if st.button("🖨️ Criar PDF"):
         with st.spinner("Gerando relatório..."):
-            pdf_file = generate_pdf(data, signals, final_verdict)
+            pdf_file = generate_pdf(data, signals)
             st.download_button(
-                "⬇️ Baixar Relatório Completo",
+                "⬇️ Baixar Relatório",
                 data=pdf_file,
                 file_name="relatorio_btc_pro.pdf",
                 mime="application/pdf"
             )
-    
-    st.markdown("""
-    **📋 Resumo Executivo:**
-    - **12 indicadores técnicos e on-chain**
-    - **Análise consolidada automática**
-    - **Dados atualizados a cada hora**
-    """)
 
-#
+# ---- BOTÃO DE ATUALIZAÇÃO ----
+st.sidebar.header("Configurações")
+if st.sidebar.button("🔄 Atualizar Dados"):
+    st.cache_data.clear()
+    st.rerun()
+
+st.sidebar.markdown("""
+**📌 Legenda:**
+- 🟢 **COMPRA**: Indicador positivo
+- 🔴 **VENDA**: Indicador negativo
+- 📈 **MA7/MA30**: Médias móveis de 7 e 30 dias
+""")
