@@ -65,6 +65,39 @@ def calculate_bollinger_bands(series, window=20, num_std=2):
     lower = sma - (std * num_std)
     return upper, lower
 
+def simulate_event(event, price_series):
+    """Simula impacto de eventos no preço com tratamento robusto"""
+    if not isinstance(price_series, pd.Series):
+        st.error("Dados de preço inválidos para simulação")
+        return pd.Series()
+    
+    if price_series.empty:
+        st.warning("Série de preços vazia - retornando dados originais")
+        return price_series.copy()
+    
+    try:
+        if event == "Halving":
+            # Efeito histórico: +120% em 1 ano após halving
+            growth = np.log(2.2) / 365  # Crescimento diário composto
+            simulated = price_series * (1 + growth) ** np.arange(len(price_series))
+            return simulated
+            
+        elif event == "Crash":
+            # -30% instantâneo
+            return price_series * 0.7
+            
+        elif event == "ETF Approval":
+            # +50% instantâneo
+            return price_series * 1.5
+            
+        else:
+            st.warning(f"Evento '{event}' não reconhecido - retornando dados originais")
+            return price_series.copy()
+            
+    except Exception as e:
+        st.error(f"Erro na simulação do evento {event}: {str(e)}")
+        return price_series.copy()
+
 def get_market_sentiment():
     """Coleta dados de sentimentos do mercado com tratamento de erro robusto"""
     try:
@@ -856,26 +889,31 @@ with tab4:  # Cenários
         ["Halving", "Crash", "ETF Approval"]
     )
     
-    if 'prices' not in data or data['prices'].empty:
+    if 'prices' not in data or data['prices'].empty or 'price' not in data['prices'].columns:
         st.warning("Dados de preços não disponíveis para simulação")
     else:
-        simulated_prices = simulate_event(
-            event, 
-            data['prices']['price'].tail(90).reset_index(drop=True)
-        )
-        
-        fig_scenario = go.Figure()
-        fig_scenario.add_trace(go.Scatter(
-            x=data['prices']['date'].tail(90),
-            y=data['prices']['price'].tail(90),
-            name="Preço Real"
-        ))
-        fig_scenario.add_trace(go.Scatter(
-            x=data['prices']['date'].tail(90),
-            y=simulated_prices,
-            name=f"Projeção: {event}"
-        ))
-        st.plotly_chart(fig_scenario, use_container_width=True)
+        try:
+            price_series = data['prices']['price'].tail(90).reset_index(drop=True)
+            simulated_prices = simulate_event(event, price_series)
+            
+            if simulated_prices.empty:
+                st.error("Não foi possível gerar simulação")
+            else:
+                fig_scenario = go.Figure()
+                fig_scenario.add_trace(go.Scatter(
+                    x=data['prices']['date'].tail(90),
+                    y=data['prices']['price'].tail(90),
+                    name="Preço Real"
+                ))
+                fig_scenario.add_trace(go.Scatter(
+                    x=data['prices']['date'].tail(90),
+                    y=simulated_prices,
+                    name=f"Projeção: {event}"
+                ))
+                st.plotly_chart(fig_scenario, use_container_width=True)
+                
+        except Exception as e:
+            st.error(f"Erro ao executar simulação: {str(e)}")
 
 with tab5:  # Técnico
     if 'prices' not in data or data['prices'].empty:
