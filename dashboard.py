@@ -19,169 +19,20 @@ st.set_page_config(layout="wide", page_title="BTC Super Dashboard Pro+")
 st.title("🚀 BTC Super Dashboard Pro+ - Edição Premium")
 
 # ======================
-# NOVAS FUNÇÕES DE BACKTESTING AVANÇADO
-# ======================
-
-def calculate_daily_returns(df):
-    """Calcula retornos diários e cumulativos"""
-    df['daily_return'] = df['price'].pct_change()
-    df['cumulative_return'] = (1 + df['daily_return']).cumprod()
-    return df
-
-def calculate_strategy_returns(df, signal_col='signal'):
-    """Calcula retornos da estratégia baseada em coluna de sinais"""
-    df['strategy_return'] = df[signal_col].shift(1) * df['daily_return']
-    df['strategy_cumulative'] = (1 + df['strategy_return']).cumprod()
-    return df
-
-def backtest_rsi_strategy(df, rsi_window=14, overbought=70, oversold=30):
-    """Estratégia avançada de RSI com zonas personalizadas"""
-    df = df.copy()
-    df['RSI'] = calculate_rsi(df['price'], rsi_window)
-    
-    # Sinais mais sofisticados com confirmação
-    df['signal'] = 0
-    df.loc[(df['RSI'] < oversold) & (df['price'] > df['MA30']), 'signal'] = 1
-    df.loc[(df['RSI'] > overbought) & (df['price'] < df['MA30']), 'signal'] = -1
-    
-    return calculate_strategy_returns(df)
-
-def backtest_macd_strategy(df, fast=12, slow=26, signal=9):
-    """Estratégia MACD cruzamento de linha zero e linha de sinal"""
-    df = df.copy()
-    df['MACD'], df['MACD_Signal'] = calculate_macd(df['price'], fast, slow, signal)
-    
-    # Cruzamento de linha zero
-    df['signal'] = 0
-    df.loc[df['MACD'] > 0, 'signal'] = 1
-    df.loc[df['MACD'] < 0, 'signal'] = -1
-    
-    # Cruzamento de linha de sinal (sobrescreve se for mais forte)
-    df.loc[(df['MACD'] > df['MACD_Signal']) & (df['MACD'] > 0), 'signal'] = 1.5  # Compra forte
-    df.loc[(df['MACD'] < df['MACD_Signal']) & (df['MACD'] < 0), 'signal'] = -1.5 # Venda forte
-    
-    return calculate_strategy_returns(df)
-
-def backtest_bollinger_strategy(df, window=20, num_std=2):
-    """Estratégia Bandas de Bollinger com saída progressiva"""
-    df = df.copy()
-    df['BB_Upper'], df['BB_Lower'] = calculate_bollinger_bands(df['price'], window, num_std)
-    df['MA'] = df['price'].rolling(window).mean()
-    
-    df['signal'] = 0
-    # Entrada quando toca banda inferior
-    df.loc[df['price'] < df['BB_Lower'], 'signal'] = 1
-    # Saída progressiva - 50% na média, 50% na banda superior
-    df.loc[(df['price'] > df['MA']) & (df['signal'].shift(1) == 1), 'signal'] = 0.5
-    df.loc[df['price'] > df['BB_Upper'], 'signal'] = -1  # Venda se tocar banda superior
-    
-    return calculate_strategy_returns(df)
-
-def backtest_ema_cross_strategy(df, short_window=9, long_window=21):
-    """Estratégia de cruzamento de EMAs"""
-    df = df.copy()
-    df['EMA_Short'] = calculate_ema(df['price'], short_window)
-    df['EMA_Long'] = calculate_ema(df['price'], long_window)
-    
-    df['signal'] = 0
-    df.loc[df['EMA_Short'] > df['EMA_Long'], 'signal'] = 1  # Compra quando EMA curta cruza acima
-    df.loc[df['EMA_Short'] < df['EMA_Long'], 'signal'] = -1 # Venda quando EMA curta cruza abaixo
-    
-    return calculate_strategy_returns(df)
-
-def calculate_metrics(df):
-    """Calcula métricas avançadas de performance"""
-    metrics = {}
-    returns = df['strategy_return'].dropna()
-    buy_hold_returns = df['daily_return'].dropna()
-    
-    # Retornos
-    metrics['Retorno Estratégia'] = df['strategy_cumulative'].iloc[-1] - 1
-    metrics['Retorno Buy & Hold'] = df['cumulative_return'].iloc[-1] - 1
-    
-    # Volatilidade
-    metrics['Vol Estratégia'] = returns.std() * np.sqrt(365)
-    metrics['Vol Buy & Hold'] = buy_hold_returns.std() * np.sqrt(365)
-    
-    # Razão Sharpe (assumindo risco zero)
-    metrics['Sharpe Estratégia'] = returns.mean() / returns.std() * np.sqrt(365)
-    metrics['Sharpe Buy & Hold'] = buy_hold_returns.mean() / buy_hold_returns.std() * np.sqrt(365)
-    
-    # Drawdown
-    cum_returns = (1 + returns).cumprod()
-    peak = cum_returns.expanding(min_periods=1).max()
-    drawdown = (cum_returns - peak) / peak
-    metrics['Max Drawdown'] = drawdown.min()
-    
-    # Win Rate
-    metrics['Win Rate'] = len(returns[returns > 0]) / len(returns)
-    
-    # Taxa de Acerto
-    trades = df[df['signal'] != 0]
-    if len(trades) > 0:
-        metrics['Taxa Acerto'] = len(trades[trades['strategy_return'] > 0]) / len(trades)
-    else:
-        metrics['Taxa Acerto'] = 0
-    
-    return metrics
-
-def optimize_strategy_parameters(data, strategy_name, param_space):
-    """Otimiza os parâmetros de uma estratégia específica"""
-    best_sharpe = -np.inf
-    best_params = None
-    best_results = None
-    
-    # Gerar todas combinações de parâmetros
-    param_combinations = list(ParameterGrid(param_space))
-    
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    for i, params in enumerate(param_combinations):
-        try:
-            # Executar backtest com os parâmetros atuais
-            if strategy_name == 'RSI':
-                df = backtest_rsi_strategy(data['prices'], **params)
-            elif strategy_name == 'MACD':
-                df = backtest_macd_strategy(data['prices'], **params)
-            elif strategy_name == 'Bollinger':
-                df = backtest_bollinger_strategy(data['prices'], **params)
-            elif strategy_name == 'EMA Cross':
-                df = backtest_ema_cross_strategy(data['prices'], **params)
-            
-            # Calcular métricas
-            returns = df['strategy_return'].dropna()
-            if len(returns) > 0:
-                sharpe = returns.mean() / returns.std() * np.sqrt(365)
-                
-                # Atualizar melhor combinação se necessário
-                if sharpe > best_sharpe:
-                    best_sharpe = sharpe
-                    best_params = params
-                    best_results = df
-        except:
-            continue
-        
-        # Atualizar barra de progresso
-        progress = (i + 1) / len(param_combinations)
-        progress_bar.progress(progress)
-        status_text.text(f"Testando combinação {i+1}/{len(param_combinations)} | Melhor Sharpe: {best_sharpe:.2f}")
-    
-    progress_bar.empty()
-    status_text.empty()
-    
-    return best_params, best_sharpe, best_results
-
-# ======================
-# FUNÇÕES ORIGINAIS (MANTIDAS)
+# FUNÇÕES DE CÁLCULO (ATUALIZADAS)
 # ======================
 
 def calculate_ema(series, window):
     """Calcula a Média Móvel Exponencial (EMA)"""
+    if series.empty:
+        return pd.Series()
     return series.ewm(span=window, adjust=False).mean()
 
 def calculate_rsi(series, window=14):
-    """Calcula o Índice de Força Relativa (RSI)"""
+    """Calcula o Índice de Força Relativa (RSI) com tratamento para dados vazios"""
+    if len(series) < window + 1:
+        return pd.Series(np.nan, index=series.index)
+    
     delta = series.diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -194,6 +45,9 @@ def calculate_rsi(series, window=14):
 
 def calculate_macd(series, fast=12, slow=26, signal=9):
     """Calcula o MACD com linha de sinal"""
+    if len(series) < slow + signal:
+        return pd.Series(np.nan, index=series.index), pd.Series(np.nan, index=series.index)
+    
     ema_fast = calculate_ema(series, fast)
     ema_slow = calculate_ema(series, slow)
     macd = ema_fast - ema_slow
@@ -201,7 +55,10 @@ def calculate_macd(series, fast=12, slow=26, signal=9):
     return macd, signal_line
 
 def calculate_bollinger_bands(series, window=20, num_std=2):
-    """Calcula as Bandas de Bollinger"""
+    """Calcula as Bandas de Bollinger com tratamento para dados insuficientes"""
+    if len(series) < window:
+        return pd.Series(np.nan, index=series.index), pd.Series(np.nan, index=series.index)
+    
     sma = series.rolling(window).mean()
     std = series.rolling(window).std()
     upper = sma + (std * num_std)
@@ -209,96 +66,281 @@ def calculate_bollinger_bands(series, window=20, num_std=2):
     return upper, lower
 
 def get_market_sentiment():
-    """Coleta dados de sentimentos do mercado"""
+    """Coleta dados de sentimentos do mercado com tratamento de erro robusto"""
     try:
-        response = requests.get("https://api.alternative.me/fng/", timeout=5)
+        response = requests.get("https://api.alternative.me/fng/", timeout=10)
+        response.raise_for_status()
         data = response.json()
         return {
             "value": int(data["data"][0]["value"]),
             "sentiment": data["data"][0]["value_classification"]
         }
-    except:
+    except Exception as e:
+        st.warning(f"Não foi possível obter o sentimento do mercado: {str(e)}")
         return {"value": 50, "sentiment": "Neutral"}
 
 def get_traditional_assets():
-    """Coleta dados de ativos tradicionais"""
+    """Coleta dados de ativos tradicionais com tratamento de erro"""
     assets = {
         "S&P 500": "^GSPC",
         "Ouro": "GC=F",
         "ETH-USD": "ETH-USD"
     }
     dfs = []
+    
     for name, ticker in assets.items():
-        data = yf.Ticker(ticker).history(period="90d", interval="1d")
-        data = data.reset_index()[['Date', 'Close']].rename(columns={'Close': 'value', 'Date': 'date'})
-        data['asset'] = name
-        dfs.append(data)
-    return pd.concat(dfs)
+        try:
+            data = yf.Ticker(ticker).history(period="90d", interval="1d")
+            if not data.empty:
+                data = data.reset_index()[['Date', 'Close']].rename(columns={'Close': 'value', 'Date': 'date'})
+                data['asset'] = name
+                dfs.append(data)
+        except Exception as e:
+            st.warning(f"Não foi possível obter dados para {name}: {str(e)}")
+    
+    return pd.concat(dfs) if dfs else pd.DataFrame()
 
-def backtest_strategy(data, rsi_window=14):
-    """Backtesting automático baseado em RSI e Médias"""
-    df = data['prices'].copy()
+# ======================
+# FUNÇÕES DE BACKTESTING (REVISTAS E APRIMORADAS)
+# ======================
+
+def calculate_daily_returns(df):
+    """Calcula retornos diários e cumulativos com verificação de dados"""
+    if df.empty or 'price' not in df.columns:
+        return pd.DataFrame()
     
-    # Calcular RSI com período personalizado
-    rsi_col = f'RSI_{rsi_window}'
-    if rsi_col not in df:
-        df[rsi_col] = calculate_rsi(df['price'], rsi_window)
-    
-    # Estratégia: Compra quando RSI < 30 e preço abaixo da média móvel
-    df['signal'] = np.where(
-        (df[rsi_col] < 30) & (df['price'] < df['MA30']), 1, 
-        np.where((df[rsi_col] > 70) & (df['price'] > df['MA30']), -1, 0))
-    
+    df = df.copy()
     df['daily_return'] = df['price'].pct_change()
-    df['strategy_return'] = df['signal'].shift(1) * df['daily_return']
-    df['cumulative_return'] = (1 + df['strategy_return']).cumprod()
-    
+    df['cumulative_return'] = (1 + df['daily_return']).cumprod()
     return df
 
-def simulate_event(event, price_series):
-    """Simula impacto de eventos no preço"""
-    if event == "Halving":
-        # Efeito histórico: +120% em 1 ano após halving
-        growth = np.log(2.2) / 365  # Crescimento diário composto
-        return price_series * (1 + growth) ** np.arange(len(price_series))
-    elif event == "Crash":
-        return price_series * 0.7  # -30% instantâneo
-    else:  # "ETF Approval"
-        return price_series * 1.5  # +50% instantâneo
+def calculate_strategy_returns(df, signal_col='signal'):
+    """Calcula retornos da estratégia com verificações de segurança"""
+    if df.empty or 'daily_return' not in df.columns or signal_col not in df.columns:
+        return pd.DataFrame()
+    
+    df = df.copy()
+    df['strategy_return'] = df[signal_col].shift(1) * df['daily_return']
+    df['strategy_cumulative'] = (1 + df['strategy_return']).cumprod()
+    return df
 
-@st.cache_data(ttl=3600)
+def backtest_rsi_strategy(df, rsi_window=14, overbought=70, oversold=30):
+    """Estratégia RSI aprimorada com verificações robustas"""
+    if df.empty or 'price' not in df.columns:
+        return pd.DataFrame()
+    
+    df = df.copy()
+    
+    # Garantir colunas necessárias
+    if 'MA30' not in df.columns:
+        df['MA30'] = df['price'].rolling(30).mean()
+    
+    df['RSI'] = calculate_rsi(df['price'], rsi_window)
+    
+    # Sinais com confirmação
+    df['signal'] = 0
+    df.loc[(df['RSI'] < oversold) & (df['price'] > df['MA30']), 'signal'] = 1
+    df.loc[(df['RSI'] > overbought) & (df['price'] < df['MA30']), 'signal'] = -1
+    
+    df = calculate_daily_returns(df)
+    return calculate_strategy_returns(df)
+
+def backtest_macd_strategy(df, fast=12, slow=26, signal=9):
+    """Estratégia MACD com tratamento robusto"""
+    if df.empty or 'price' not in df.columns:
+        return pd.DataFrame()
+    
+    df = df.copy()
+    df['MACD'], df['MACD_Signal'] = calculate_macd(df['price'], fast, slow, signal)
+    
+    df['signal'] = 0
+    df.loc[df['MACD'] > 0, 'signal'] = 1
+    df.loc[df['MACD'] < 0, 'signal'] = -1
+    
+    # Sinal forte no cruzamento
+    df.loc[(df['MACD'] > df['MACD_Signal']) & (df['MACD'] > 0), 'signal'] = 1.5
+    df.loc[(df['MACD'] < df['MACD_Signal']) & (df['MACD'] < 0), 'signal'] = -1.5
+    
+    df = calculate_daily_returns(df)
+    return calculate_strategy_returns(df)
+
+def backtest_bollinger_strategy(df, window=20, num_std=2):
+    """Estratégia Bandas de Bollinger robusta"""
+    if df.empty or 'price' not in df.columns:
+        return pd.DataFrame()
+    
+    df = df.copy()
+    df['BB_Upper'], df['BB_Lower'] = calculate_bollinger_bands(df['price'], window, num_std)
+    df['MA'] = df['price'].rolling(window).mean()
+    
+    df['signal'] = 0
+    df.loc[df['price'] < df['BB_Lower'], 'signal'] = 1
+    df.loc[(df['price'] > df['MA']) & (df['signal'].shift(1) == 1), 'signal'] = 0.5
+    df.loc[df['price'] > df['BB_Upper'], 'signal'] = -1
+    
+    df = calculate_daily_returns(df)
+    return calculate_strategy_returns(df)
+
+def backtest_ema_cross_strategy(df, short_window=9, long_window=21):
+    """Estratégia EMA Cross com verificações"""
+    if df.empty or 'price' not in df.columns:
+        return pd.DataFrame()
+    
+    df = df.copy()
+    df['EMA_Short'] = calculate_ema(df['price'], short_window)
+    df['EMA_Long'] = calculate_ema(df['price'], long_window)
+    
+    df['signal'] = 0
+    df.loc[df['EMA_Short'] > df['EMA_Long'], 'signal'] = 1
+    df.loc[df['EMA_Short'] < df['EMA_Long'], 'signal'] = -1
+    
+    df = calculate_daily_returns(df)
+    return calculate_strategy_returns(df)
+
+def calculate_metrics(df):
+    """Calcula métricas de performance com tratamento robusto"""
+    metrics = {}
+    
+    if df.empty or 'strategy_return' not in df.columns or 'daily_return' not in df.columns:
+        return metrics
+    
+    returns = df['strategy_return'].dropna()
+    buy_hold_returns = df['daily_return'].dropna()
+    
+    if len(returns) == 0 or len(buy_hold_returns) == 0:
+        return metrics
+    
+    # Retornos
+    metrics['Retorno Estratégia'] = df['strategy_cumulative'].iloc[-1] - 1 if 'strategy_cumulative' in df.columns else 0
+    metrics['Retorno Buy & Hold'] = df['cumulative_return'].iloc[-1] - 1 if 'cumulative_return' in df.columns else 0
+    
+    # Volatilidade
+    metrics['Vol Estratégia'] = returns.std() * np.sqrt(365) if len(returns) > 1 else 0
+    metrics['Vol Buy & Hold'] = buy_hold_returns.std() * np.sqrt(365) if len(buy_hold_returns) > 1 else 0
+    
+    # Razão Sharpe
+    metrics['Sharpe Estratégia'] = (returns.mean() / returns.std() * np.sqrt(365)) if returns.std() != 0 else 0
+    metrics['Sharpe Buy & Hold'] = (buy_hold_returns.mean() / buy_hold_returns.std() * np.sqrt(365)) if buy_hold_returns.std() != 0 else 0
+    
+    # Drawdown
+    cum_returns = (1 + returns).cumprod()
+    peak = cum_returns.expanding(min_periods=1).max()
+    drawdown = (cum_returns - peak) / peak
+    metrics['Max Drawdown'] = drawdown.min() if len(drawdown) > 0 else 0
+    
+    # Win Rate
+    metrics['Win Rate'] = len(returns[returns > 0]) / len(returns) if len(returns) > 0 else 0
+    
+    # Taxa de Acerto
+    trades = df[df['signal'] != 0] if 'signal' in df.columns else pd.DataFrame()
+    metrics['Taxa Acerto'] = len(trades[trades['strategy_return'] > 0]) / len(trades) if len(trades) > 0 else 0
+    
+    return metrics
+
+def optimize_strategy_parameters(data, strategy_name, param_space):
+    """Otimização robusta de parâmetros"""
+    best_sharpe = -np.inf
+    best_params = None
+    best_results = None
+    
+    if 'prices' not in data or data['prices'].empty:
+        return best_params, best_sharpe, best_results
+    
+    param_combinations = list(ParameterGrid(param_space))
+    if not param_combinations:
+        return best_params, best_sharpe, best_results
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for i, params in enumerate(param_combinations):
+        try:
+            if strategy_name == 'RSI':
+                df = backtest_rsi_strategy(data['prices'], **params)
+            elif strategy_name == 'MACD':
+                df = backtest_macd_strategy(data['prices'], **params)
+            elif strategy_name == 'Bollinger':
+                df = backtest_bollinger_strategy(data['prices'], **params)
+            elif strategy_name == 'EMA Cross':
+                df = backtest_ema_cross_strategy(data['prices'], **params)
+            else:
+                continue
+                
+            if df.empty or 'strategy_return' not in df.columns:
+                continue
+                
+            returns = df['strategy_return'].dropna()
+            if len(returns) > 1:
+                sharpe = returns.mean() / returns.std() * np.sqrt(365) if returns.std() != 0 else 0
+                
+                if sharpe > best_sharpe:
+                    best_sharpe = sharpe
+                    best_params = params
+                    best_results = df
+                    
+        except Exception as e:
+            continue
+        
+        progress = (i + 1) / len(param_combinations)
+        progress_bar.progress(progress)
+        status_text.text(f"Testando combinação {i+1}/{len(param_combinations)} | Melhor Sharpe: {max(best_sharpe, 0):.2f}")
+    
+    progress_bar.empty()
+    status_text.empty()
+    
+    return best_params, best_sharpe, best_results
+
+# ======================
+# CARREGAMENTO DE DADOS (REVISADO)
+# ======================
+
+@st.cache_data(ttl=3600, show_spinner="Carregando dados do mercado...")
 def load_data():
     data = {}
     try:
         # Preço do Bitcoin (últimos 90 dias)
         url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=90"
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=15)
         response.raise_for_status()
         market_data = response.json()
         
         data['prices'] = pd.DataFrame(market_data["prices"], columns=["timestamp", "price"])
         data['prices']["date"] = pd.to_datetime(data['prices']["timestamp"], unit="ms")
         
-        # Calculando todos os indicadores técnicos básicos
+        # Calculando indicadores técnicos com tratamento de erro
         price_series = data['prices']['price']
-        data['prices']['MA7'] = price_series.rolling(7).mean()
-        data['prices']['MA30'] = price_series.rolling(30).mean()
-        data['prices']['MA200'] = price_series.rolling(200).mean()
-        data['prices']['RSI_14'] = calculate_rsi(price_series, 14)  # RSI padrão
-        data['prices']['MACD'], data['prices']['MACD_Signal'] = calculate_macd(price_series)
-        data['prices']['BB_Upper_20'], data['prices']['BB_Lower_20'] = calculate_bollinger_bands(price_series, 20)
+        
+        if not price_series.empty:
+            data['prices']['MA7'] = price_series.rolling(7).mean()
+            data['prices']['MA30'] = price_series.rolling(30).mean()
+            data['prices']['MA200'] = price_series.rolling(200).mean()
+            data['prices']['RSI_14'] = calculate_rsi(price_series, 14)
+            
+            macd, signal = calculate_macd(price_series)
+            data['prices']['MACD'] = macd
+            data['prices']['MACD_Signal'] = signal
+            
+            upper, lower = calculate_bollinger_bands(price_series)
+            data['prices']['BB_Upper_20'] = upper
+            data['prices']['BB_Lower_20'] = lower
         
         # Hashrate (taxa de hash)
-        hr_response = requests.get("https://api.blockchain.info/charts/hash-rate?format=json&timespan=3months", timeout=10)
-        hr_response.raise_for_status()
-        data['hashrate'] = pd.DataFrame(hr_response.json()["values"])
-        data['hashrate']["date"] = pd.to_datetime(data['hashrate']["x"], unit="s")
+        try:
+            hr_response = requests.get("https://api.blockchain.info/charts/hash-rate?format=json&timespan=3months", timeout=10)
+            hr_response.raise_for_status()
+            data['hashrate'] = pd.DataFrame(hr_response.json()["values"])
+            data['hashrate']["date"] = pd.to_datetime(data['hashrate']["x"], unit="s")
+        except Exception:
+            data['hashrate'] = pd.DataFrame()
         
         # Dificuldade de mineração
-        diff_response = requests.get("https://api.blockchain.info/charts/difficulty?timespan=2years&format=json", timeout=10)
-        diff_response.raise_for_status()
-        data['difficulty'] = pd.DataFrame(diff_response.json()["values"])
-        data['difficulty']["date"] = pd.to_datetime(data['difficulty']["x"], unit="s")
+        try:
+            diff_response = requests.get("https://api.blockchain.info/charts/difficulty?timespan=2years&format=json", timeout=10)
+            diff_response.raise_for_status()
+            data['difficulty'] = pd.DataFrame(diff_response.json()["values"])
+            data['difficulty']["date"] = pd.to_datetime(data['difficulty']["x"], unit="s")
+        except Exception:
+            data['difficulty'] = pd.DataFrame()
         
         # Dados simulados de exchanges
         data['exchanges'] = {
@@ -316,27 +358,37 @@ def load_data():
         
     except requests.exceptions.RequestException as e:
         st.error(f"Erro na requisição à API: {str(e)}")
+        data['prices'] = pd.DataFrame()
     except Exception as e:
         st.error(f"Erro ao processar dados: {str(e)}")
+        data['prices'] = pd.DataFrame()
+    
     return data
 
+# ======================
+# GERADOR DE SINAIS (REVISADO)
+# ======================
+
 def generate_signals(data, rsi_window=14, bb_window=20):
+    """Geração robusta de sinais com tratamento de erro"""
     signals = []
     buy_signals = 0
     sell_signals = 0
     
-    if not data['prices'].empty:
+    if 'prices' not in data or data['prices'].empty:
+        return signals, "➖ DADOS INDISPONÍVEIS", buy_signals, sell_signals
+    
+    try:
         last_price = data['prices']['price'].iloc[-1]
         
-        # 1. Sinais de Médias Móveis (usando as médias selecionadas)
+        # 1. Sinais de Médias Móveis
         ma_signals = []
         for window in st.session_state.user_settings['ma_windows']:
             col_name = f'MA{window}'
-            if col_name not in data['prices']:
+            if col_name not in data['prices'].columns:
                 data['prices'][col_name] = data['prices']['price'].rolling(window).mean()
             ma_signals.append((f"Preço vs MA{window}", data['prices'][col_name].iloc[-1]))
         
-        # Adicionar comparação entre médias
         if len(st.session_state.user_settings['ma_windows']) > 1:
             ma1 = st.session_state.user_settings['ma_windows'][0]
             ma2 = st.session_state.user_settings['ma_windows'][1]
@@ -355,47 +407,38 @@ def generate_signals(data, rsi_window=14, bb_window=20):
         
         # 2. RSI com período personalizado
         rsi_col = f'RSI_{rsi_window}'
-        if rsi_col not in data['prices']:
+        if rsi_col not in data['prices'].columns:
             data['prices'][rsi_col] = calculate_rsi(data['prices']['price'], rsi_window)
-        rsi = data['prices'][rsi_col].iloc[-1]
-        rsi_signal = "COMPRA" if rsi < 30 else "VENDA" if rsi > 70 else "NEUTRO"
-        signals.append((f"RSI ({rsi_window})", rsi_signal, f"{rsi:.2f}"))
+        
+        if not data['prices'][rsi_col].isna().all():
+            rsi = data['prices'][rsi_col].iloc[-1]
+            rsi_signal = "COMPRA" if rsi < 30 else "VENDA" if rsi > 70 else "NEUTRO"
+            signals.append((f"RSI ({rsi_window})", rsi_signal, f"{rsi:.2f}"))
         
         # 3. MACD
-        macd = data['prices']['MACD'].iloc[-1]
-        macd_signal = "COMPRA" if macd > 0 else "VENDA"
-        signals.append(("MACD", macd_signal, f"{macd:.2f}"))
+        if 'MACD' in data['prices'].columns and not data['prices']['MACD'].isna().all():
+            macd = data['prices']['MACD'].iloc[-1]
+            macd_signal = "COMPRA" if macd > 0 else "VENDA"
+            signals.append(("MACD", macd_signal, f"{macd:.2f}"))
         
-        # 4. Bandas de Bollinger com janela personalizada
+        # 4. Bandas de Bollinger
         bb_upper_col = f'BB_Upper_{bb_window}'
         bb_lower_col = f'BB_Lower_{bb_window}'
-        if bb_upper_col not in data['prices']:
-            data['prices'][bb_upper_col], data['prices'][bb_lower_col] = calculate_bollinger_bands(
-                data['prices']['price'], window=bb_window)
         
-        bb_upper = data['prices'][bb_upper_col].iloc[-1]
-        bb_lower = data['prices'][bb_lower_col].iloc[-1]
-        bb_signal = "COMPRA" if last_price < bb_lower else "VENDA" if last_price > bb_upper else "NEUTRO"
-        signals.append((f"Bollinger Bands ({bb_window})", bb_signal, f"Atual: ${last_price:,.0f}"))
+        if bb_upper_col not in data['prices'].columns:
+            upper, lower = calculate_bollinger_bands(data['prices']['price'], window=bb_window)
+            data['prices'][bb_upper_col] = upper
+            data['prices'][bb_lower_col] = lower
+        
+        if not data['prices'][bb_upper_col].isna().all():
+            bb_upper = data['prices'][bb_upper_col].iloc[-1]
+            bb_lower = data['prices'][bb_lower_col].iloc[-1]
+            bb_signal = "COMPRA" if last_price < bb_lower else "VENDA" if last_price > bb_upper else "NEUTRO"
+            signals.append((f"Bollinger Bands ({bb_window})", bb_signal, f"Atual: ${last_price:,.0f}"))
     
-    # 5. Fluxo de exchanges
-    if data['exchanges']:
-        net_flows = sum(ex["inflow"] - ex["outflow"] for ex in data['exchanges'].values())
-        flow_signal = "COMPRA" if net_flows < 0 else "VENDA"
-        signals.append(("Fluxo Líquido Exchanges", flow_signal, f"{net_flows:,} BTC"))
-    
-    # 6. Hashrate vs Dificuldade
-    if not data['hashrate'].empty and not data['difficulty'].empty:
-        hr_growth = data['hashrate']['y'].iloc[-1] / data['hashrate']['y'].iloc[-30] - 1
-        diff_growth = data['difficulty']['y'].iloc[-1] / data['difficulty']['y'].iloc[-30] - 1
-        hr_signal = "COMPRA" if hr_growth > diff_growth else "VENDA"
-        signals.append(("Hashrate vs Dificuldade", hr_signal, f"{(hr_growth - diff_growth):.2%}"))
-    
-    # 7. Atividade de Whales
-    if 'whale_alert' in data and not data['whale_alert'].empty:
-        whale_ratio = data['whale_alert']['amount'].sum() / (24*30)  # Normalizado para 30 dias
-        whale_signal = "COMPRA" if whale_ratio < 100 else "VENDA"
-        signals.append(("Atividade de Whales", whale_signal, f"{whale_ratio:.1f} BTC/dia"))
+    except Exception as e:
+        st.error(f"Erro ao gerar sinais: {str(e)}")
+        return signals, "➖ ERRO NA ANÁLISE", buy_signals, sell_signals
     
     # Contagem de sinais
     buy_signals = sum(1 for s in signals if s[1] == "COMPRA")
@@ -416,7 +459,7 @@ def generate_signals(data, rsi_window=14, bb_window=20):
     return signals, final_verdict, buy_signals, sell_signals
 
 # ======================
-# INTERFACE DO USUÁRIO
+# INTERFACE DO USUÁRIO (REVISADA)
 # ======================
 
 # Carregar dados
@@ -482,10 +525,7 @@ with col2:
     if st.button("🔄 Resetar"):
         st.session_state.user_settings = DEFAULT_SETTINGS.copy()
         st.sidebar.success("Configurações resetadas para padrão!")
-        if hasattr(st, 'rerun'):
-            st.rerun()
-        else:
-            st.experimental_rerun()
+        st.rerun()
 
 if st.sidebar.button("Ativar Monitoramento Contínuo"):
     st.sidebar.success("Alertas ativados!")
@@ -505,32 +545,39 @@ st.header("📊 Painel Integrado BTC Pro+")
 
 # Linha de métricas
 col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("Preço BTC", f"${data['prices']['price'].iloc[-1]:,.2f}")
+
+if 'prices' in data and not data['prices'].empty:
+    col1.metric("Preço BTC", f"${data['prices']['price'].iloc[-1]:,.2f}")
+else:
+    col1.metric("Preço BTC", "N/A")
+
 col2.metric("Sentimento", f"{sentiment['value']}/100", sentiment['sentiment'])
 
 # S&P 500 com %
-sp500_data = traditional_assets[traditional_assets['asset']=='S&P 500']
-sp500_value = sp500_data['value'].iloc[-1]
-sp500_prev = sp500_data['value'].iloc[-2] if len(sp500_data) > 1 else sp500_value
-sp500_change = (sp500_value/sp500_prev - 1)*100
-col3.metric(
-    "S&P 500", 
-    f"${sp500_value:,.0f}",
-    f"{sp500_change:+.2f}%",
-    delta_color="normal"
-)
+if not traditional_assets.empty:
+    sp500_data = traditional_assets[traditional_assets['asset']=='S&P 500']
+    if not sp500_data.empty:
+        sp500_value = sp500_data['value'].iloc[-1]
+        sp500_prev = sp500_data['value'].iloc[-2] if len(sp500_data) > 1 else sp500_value
+        sp500_change = (sp500_value/sp500_prev - 1)*100
+        col3.metric("S&P 500", f"${sp500_value:,.0f}", f"{sp500_change:+.2f}%")
+    else:
+        col3.metric("S&P 500", "N/A")
+else:
+    col3.metric("S&P 500", "N/A")
 
 # Ouro com %
-ouro_data = traditional_assets[traditional_assets['asset']=='Ouro']
-ouro_value = ouro_data['value'].iloc[-1]
-ouro_prev = ouro_data['value'].iloc[-2] if len(ouro_data) > 1 else ouro_value
-ouro_change = (ouro_value/ouro_prev - 1)*100
-col4.metric(
-    "Ouro", 
-    f"${ouro_value:,.0f}",
-    f"{ouro_change:+.2f}%",
-    delta_color="normal"
-)
+if not traditional_assets.empty:
+    ouro_data = traditional_assets[traditional_assets['asset']=='Ouro']
+    if not ouro_data.empty:
+        ouro_value = ouro_data['value'].iloc[-1]
+        ouro_prev = ouro_data['value'].iloc[-2] if len(ouro_data) > 1 else ouro_value
+        ouro_change = (ouro_value/ouro_prev - 1)*100
+        col4.metric("Ouro", f"${ouro_value:,.0f}", f"{ouro_change:+.2f}%")
+    else:
+        col4.metric("Ouro", "N/A")
+else:
+    col4.metric("Ouro", "N/A")
 
 # Análise Final
 col5.metric("Análise Final", final_verdict)
@@ -549,57 +596,43 @@ with tab1:  # Mercado
     col1, col2 = st.columns([3, 2])
     
     with col1:
-        if not data['prices'].empty:
-            # Mostrar apenas as médias móveis selecionadas
-            ma_cols = ['price'] + [f'MA{window}' for window in st.session_state.user_settings['ma_windows']]
+        if 'prices' in data and not data['prices'].empty:
+            ma_cols = ['price'] + [f'MA{window}' for window in st.session_state.user_settings['ma_windows'] 
+                                 if f'MA{window}' in data['prices'].columns]
             fig = px.line(data['prices'], x="date", y=ma_cols, 
                          title="Preço BTC e Médias Móveis")
             st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Dados de preços não disponíveis")
     
     with col2:
         st.subheader("📊 Análise Técnica")
         
-        # Container para os indicadores
-        indicators_container = st.container()
+        if not signals:
+            st.warning("Nenhum sinal disponível")
+        else:
+            indicators_container = st.container()
+            with indicators_container:
+                for signal in signals:
+                    if "MA" in signal[0] or "Preço vs" in signal[0]:
+                        color = "🟢" if signal[1] == "COMPRA" else "🔴" if signal[1] == "VENDA" else "🟡"
+                        st.markdown(f"{color} **{signal[0]}**: {signal[1]} ({signal[2]})")
+                
+                rsi_signal = next((s for s in signals if "RSI" in s[0]), None)
+                if rsi_signal:
+                    rsi_color = "🟢" if rsi_signal[1] == "COMPRA" else "🔴" if rsi_signal[1] == "VENDA" else "🟡"
+                    st.markdown(f"{rsi_color} **{rsi_signal[0]}**: {rsi_signal[1]} ({rsi_signal[2]})")
+                
+                macd_signal = next((s for s in signals if "MACD" in s[0]), None)
+                if macd_signal:
+                    macd_color = "🟢" if macd_signal[1] == "COMPRA" else "🔴"
+                    st.markdown(f"{macd_color} **{macd_signal[0]}**: {macd_signal[1]} ({macd_signal[2]})")
+                
+                bb_signal = next((s for s in signals if "Bollinger" in s[0]), None)
+                if bb_signal:
+                    bb_color = "🟢" if bb_signal[1] == "COMPRA" else "🔴" if bb_signal[1] == "VENDA" else "🟡"
+                    st.markdown(f"{bb_color} **{bb_signal[0]}**: {bb_signal[1]} ({bb_signal[2]})")
         
-        with indicators_container:
-            # 1. Médias Móveis
-            for signal in signals:
-                if "MA" in signal[0] or "Preço vs" in signal[0]:
-                    color = "🟢" if signal[1] == "COMPRA" else "🔴" if signal[1] == "VENDA" else "🟡"
-                    st.markdown(f"{color} **{signal[0]}**: {signal[1]} ({signal[2]})")
-            
-            # 2. RSI
-            rsi_signal = next(s for s in signals if "RSI" in s[0])
-            rsi_color = "🟢" if rsi_signal[1] == "COMPRA" else "🔴" if rsi_signal[1] == "VENDA" else "🟡"
-            st.markdown(f"{rsi_color} **{rsi_signal[0]}**: {rsi_signal[1]} ({rsi_signal[2]})")
-            
-            # 3. MACD
-            macd_signal = next(s for s in signals if "MACD" in s[0])
-            macd_color = "🟢" if macd_signal[1] == "COMPRA" else "🔴"
-            st.markdown(f"{macd_color} **{macd_signal[0]}**: {macd_signal[1]} ({macd_signal[2]})")
-            
-            # 4. Bollinger Bands
-            bb_signal = next(s for s in signals if "Bollinger" in s[0])
-            bb_color = "🟢" if bb_signal[1] == "COMPRA" else "🔴" if bb_signal[1] == "VENDA" else "🟡"
-            st.markdown(f"{bb_color} **{bb_signal[0]}**: {bb_signal[1]} ({bb_signal[2]})")
-            
-            # 5. Fluxo de Exchanges
-            flow_signal = next(s for s in signals if "Fluxo" in s[0])
-            flow_color = "🟢" if flow_signal[1] == "COMPRA" else "🔴"
-            st.markdown(f"{flow_color} **{flow_signal[0]}**: {flow_signal[1]} ({flow_signal[2]})")
-            
-            # 6. Hashrate vs Dificuldade
-            hr_signal = next(s for s in signals if "Hashrate" in s[0])
-            hr_color = "🟢" if hr_signal[1] == "COMPRA" else "🔴"
-            st.markdown(f"{hr_color} **{hr_signal[0]}**: {hr_signal[1]} ({hr_signal[2]})")
-            
-            # 7. Atividade de Whales
-            whale_signal = next(s for s in signals if "Whales" in s[0])
-            whale_color = "🟢" if whale_signal[1] == "COMPRA" else "🔴"
-            st.markdown(f"{whale_color} **{whale_signal[0]}**: {whale_signal[1]} ({whale_signal[2]})")
-        
-        # Análise Final em destaque
         st.divider()
         st.subheader("📌 Análise Consolidada")
         
@@ -616,7 +649,6 @@ with tab1:  # Mercado
         
         st.caption(f"*Baseado na análise de {len(signals)} indicadores técnicos*")
     
-    # Gráfico de Sentimento abaixo
     st.subheader("📈 Sentimento do Mercado")
     fig_sent = go.Figure(go.Indicator(
         mode="gauge+number",
@@ -633,17 +665,24 @@ with tab1:  # Mercado
 
 with tab2:  # Comparativos
     st.subheader("📌 BTC vs Ativos Tradicionais")
-    fig_comp = px.line(
-        traditional_assets, 
-        x="date", y="value", 
-        color="asset",
-        title="Desempenho Comparativo (Últimos 90 dias)",
-        log_y=True
-    )
-    st.plotly_chart(fig_comp, use_container_width=True)
+    if not traditional_assets.empty:
+        fig_comp = px.line(
+            traditional_assets, 
+            x="date", y="value", 
+            color="asset",
+            title="Desempenho Comparativo (Últimos 90 dias)",
+            log_y=True
+        )
+        st.plotly_chart(fig_comp, use_container_width=True)
+    else:
+        st.warning("Dados comparativos não disponíveis")
 
-with tab3:  # Backtesting (COMPLETAMENTE REFEITO)
+with tab3:  # Backtesting (REVISADO E APRIMORADO)
     st.subheader("🧪 Backtesting Avançado")
+    
+    if 'prices' not in data or data['prices'].empty:
+        st.error("Dados de preços não disponíveis para backtesting")
+        st.stop()
     
     # Seletor de estratégia
     strategy = st.selectbox(
@@ -652,33 +691,43 @@ with tab3:  # Backtesting (COMPLETAMENTE REFEITO)
         key="backtest_strategy"
     )
     
+    # Garantir colunas necessárias
+    if 'MA30' not in data['prices'].columns:
+        data['prices']['MA30'] = data['prices']['price'].rolling(30).mean()
+    
     # Parâmetros dinâmicos
     params_col1, params_col2 = st.columns(2)
+    df = pd.DataFrame()
+    
     with params_col1:
-        if strategy == "RSI":
-            rsi_window = st.slider("Período RSI", 7, 21, 14)
-            overbought = st.slider("Zona de Sobrevenda", 70, 90, 70)
-            oversold = st.slider("Zona de Sobrecompra", 10, 30, 30)
-            df = backtest_rsi_strategy(data['prices'], rsi_window, overbought, oversold)
-            
-        elif strategy == "MACD":
-            fast = st.slider("EMA Rápida", 5, 20, 12)
-            slow = st.slider("EMA Lenta", 20, 50, 26)
-            signal = st.slider("Linha de Sinal", 5, 20, 9)
-            df = backtest_macd_strategy(data['prices'], fast, slow, signal)
-            
-        elif strategy == "Bollinger":
-            window = st.slider("Janela", 10, 50, 20)
-            num_std = st.slider("Nº de Desvios", 1.0, 3.0, 2.0, 0.1)
-            df = backtest_bollinger_strategy(data['prices'], window, num_std)
-            
-        else:  # EMA Cross
-            short_window = st.slider("EMA Curta", 5, 20, 9)
-            long_window = st.slider("EMA Longa", 20, 50, 21)
-            df = backtest_ema_cross_strategy(data['prices'], short_window, long_window)
+        try:
+            if strategy == "RSI":
+                rsi_window = st.slider("Período RSI", 7, 21, 14)
+                overbought = st.slider("Zona de Sobrevenda", 70, 90, 70)
+                oversold = st.slider("Zona de Sobrecompra", 10, 30, 30)
+                df = backtest_rsi_strategy(data['prices'], rsi_window, overbought, oversold)
+                
+            elif strategy == "MACD":
+                fast = st.slider("EMA Rápida", 5, 20, 12)
+                slow = st.slider("EMA Lenta", 20, 50, 26)
+                signal = st.slider("Linha de Sinal", 5, 20, 9)
+                df = backtest_macd_strategy(data['prices'], fast, slow, signal)
+                
+            elif strategy == "Bollinger":
+                window = st.slider("Janela", 10, 50, 20)
+                num_std = st.slider("Nº de Desvios", 1.0, 3.0, 2.0, 0.1)
+                df = backtest_bollinger_strategy(data['prices'], window, num_std)
+                
+            else:  # EMA Cross
+                short_window = st.slider("EMA Curta", 5, 20, 9)
+                long_window = st.slider("EMA Longa", 20, 50, 21)
+                df = backtest_ema_cross_strategy(data['prices'], short_window, long_window)
+                
+        except Exception as e:
+            st.error(f"Erro ao configurar estratégia: {str(e)}")
+            st.stop()
     
     with params_col2:
-        # Mostrar descrição da estratégia
         st.markdown("**📝 Descrição da Estratégia**")
         if strategy == "RSI":
             st.markdown("""
@@ -702,8 +751,16 @@ with tab3:  # Backtesting (COMPLETAMENTE REFEITO)
             - **Venda**: EMA curta cruza EMA longa para baixo
             """)
     
+    if df.empty:
+        st.error("Não foi possível executar o backtesting. Dados insuficientes.")
+        st.stop()
+    
     # Calcular métricas
     metrics = calculate_metrics(df)
+    
+    if not metrics:
+        st.error("Não foi possível calcular métricas de performance.")
+        st.stop()
     
     # Mostrar resultados
     st.subheader("📊 Resultados do Backtesting")
@@ -779,15 +836,18 @@ with tab3:  # Backtesting (COMPLETAMENTE REFEITO)
             best_params, best_sharpe, best_df = optimize_strategy_parameters(
                 data, strategy, param_space)
             
-            st.success(f"🎯 Melhores parâmetros encontrados (Sharpe: {best_sharpe:.2f}):")
-            st.write(best_params)
-            
-            if st.button("Aplicar Parâmetros Otimizados"):
-                if strategy == "RSI":
-                    st.session_state.user_settings['rsi_window'] = best_params['rsi_window']
-                elif strategy == "Bollinger":
-                    st.session_state.user_settings['bb_window'] = best_params['window']
-                st.rerun()
+            if best_params:
+                st.success(f"🎯 Melhores parâmetros encontrados (Sharpe: {best_sharpe:.2f}):")
+                st.json(best_params)
+                
+                if st.button("Aplicar Parâmetros Otimizados"):
+                    if strategy == "RSI":
+                        st.session_state.user_settings['rsi_window'] = best_params['rsi_window']
+                    elif strategy == "Bollinger":
+                        st.session_state.user_settings['bb_window'] = best_params['window']
+                    st.rerun()
+            else:
+                st.warning("Não foi possível encontrar parâmetros otimizados")
 
 with tab4:  # Cenários
     st.subheader("🌍 Simulação de Eventos")
@@ -796,76 +856,91 @@ with tab4:  # Cenários
         ["Halving", "Crash", "ETF Approval"]
     )
     
-    # Simular (linha corrigida)
-    simulated_prices = simulate_event(
-        event, 
-        data['prices']['price'].tail(90).reset_index(drop=True)
-    )
-    
-    fig_scenario = go.Figure()
-    fig_scenario.add_trace(go.Scatter(
-        x=data['prices']['date'].tail(90),
-        y=data['prices']['price'].tail(90),
-        name="Preço Real"
-    ))
-    fig_scenario.add_trace(go.Scatter(
-        x=data['prices']['date'].tail(90),
-        y=simulated_prices,
-        name=f"Projeção: {event}"
-    ))
-    st.plotly_chart(fig_scenario, use_container_width=True)
+    if 'prices' not in data or data['prices'].empty:
+        st.warning("Dados de preços não disponíveis para simulação")
+    else:
+        simulated_prices = simulate_event(
+            event, 
+            data['prices']['price'].tail(90).reset_index(drop=True)
+        )
+        
+        fig_scenario = go.Figure()
+        fig_scenario.add_trace(go.Scatter(
+            x=data['prices']['date'].tail(90),
+            y=data['prices']['price'].tail(90),
+            name="Preço Real"
+        ))
+        fig_scenario.add_trace(go.Scatter(
+            x=data['prices']['date'].tail(90),
+            y=simulated_prices,
+            name=f"Projeção: {event}"
+        ))
+        st.plotly_chart(fig_scenario, use_container_width=True)
 
 with tab5:  # Técnico
-    if not data['prices'].empty:
+    if 'prices' not in data or data['prices'].empty:
+        st.warning("Dados técnicos não disponíveis")
+    else:
         # Gráfico RSI com período personalizado
         rsi_window = st.session_state.user_settings['rsi_window']
         rsi_col = f'RSI_{rsi_window}'
-        if rsi_col not in data['prices']:
+        if rsi_col not in data['prices'].columns:
             data['prices'][rsi_col] = calculate_rsi(data['prices']['price'], rsi_window)
         
-        fig_rsi = px.line(data['prices'], x="date", y=rsi_col, 
-                         title=f"RSI ({rsi_window} dias)", 
-                         range_y=[0, 100])
-        fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
-        fig_rsi.add_hline(y=70, line_dash="dash", line_color="red")
-        st.plotly_chart(fig_rsi, use_container_width=True)
+        if not data['prices'][rsi_col].isna().all():
+            fig_rsi = px.line(data['prices'], x="date", y=rsi_col, 
+                             title=f"RSI ({rsi_window} dias)", 
+                             range_y=[0, 100])
+            fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
+            fig_rsi.add_hline(y=70, line_dash="dash", line_color="red")
+            st.plotly_chart(fig_rsi, use_container_width=True)
+        else:
+            st.warning("Não foi possível calcular o RSI")
         
-        # Gráfico Bollinger Bands com janela personalizada
+        # Gráfico Bollinger Bands
         bb_window = st.session_state.user_settings['bb_window']
         bb_upper_col = f'BB_Upper_{bb_window}'
         bb_lower_col = f'BB_Lower_{bb_window}'
-        if bb_upper_col not in data['prices']:
-            data['prices'][bb_upper_col], data['prices'][bb_lower_col] = calculate_bollinger_bands(
-                data['prices']['price'], window=bb_window)
         
-        fig_bb = go.Figure()
-        fig_bb.add_trace(go.Scatter(
-            x=data['prices']['date'], 
-            y=data['prices'][bb_upper_col], 
-            name="Banda Superior"))
-        fig_bb.add_trace(go.Scatter(
-            x=data['prices']['date'], 
-            y=data['prices']['price'], 
-            name="Preço"))
-        fig_bb.add_trace(go.Scatter(
-            x=data['prices']['date'], 
-            y=data['prices'][bb_lower_col], 
-            name="Banda Inferior"))
-        fig_bb.update_layout(title=f"Bandas de Bollinger ({bb_window},2)")
-        st.plotly_chart(fig_bb, use_container_width=True)
+        if bb_upper_col not in data['prices'].columns:
+            upper, lower = calculate_bollinger_bands(data['prices']['price'], window=bb_window)
+            data['prices'][bb_upper_col] = upper
+            data['prices'][bb_lower_col] = lower
         
-        # Gráfico MACD (mantido padrão)
-        fig_macd = go.Figure()
-        fig_macd.add_trace(go.Scatter(
-            x=data['prices']['date'], 
-            y=data['prices']['MACD'], 
-            name="MACD"))
-        fig_macd.add_trace(go.Scatter(
-            x=data['prices']['date'], 
-            y=data['prices']['MACD_Signal'], 
-            name="Signal"))
-        fig_macd.update_layout(title="MACD (12,26,9)")
-        st.plotly_chart(fig_macd, use_container_width=True)
+        if not data['prices'][bb_upper_col].isna().all():
+            fig_bb = go.Figure()
+            fig_bb.add_trace(go.Scatter(
+                x=data['prices']['date'], 
+                y=data['prices'][bb_upper_col], 
+                name="Banda Superior"))
+            fig_bb.add_trace(go.Scatter(
+                x=data['prices']['date'], 
+                y=data['prices']['price'], 
+                name="Preço"))
+            fig_bb.add_trace(go.Scatter(
+                x=data['prices']['date'], 
+                y=data['prices'][bb_lower_col], 
+                name="Banda Inferior"))
+            fig_bb.update_layout(title=f"Bandas de Bollinger ({bb_window},2)")
+            st.plotly_chart(fig_bb, use_container_width=True)
+        else:
+            st.warning("Não foi possível calcular as Bandas de Bollinger")
+        
+        # Gráfico MACD
+        if 'MACD' in data['prices'].columns and not data['prices']['MACD'].isna().all():
+            fig_macd = go.Figure()
+            fig_macd.add_trace(go.Scatter(
+                x=data['prices']['date'], 
+                y=data['prices']['MACD'], 
+                name="MACD"))
+            fig_macd.add_trace(go.Scatter(
+                x=data['prices']['date'], 
+                y=data['prices']['MACD_Signal'], 
+                name="Signal"))
+            fig_macd.update_layout(title="MACD (12,26,9)")
+            st.plotly_chart(fig_macd, use_container_width=True)
+        else:
+            st.warning("Não foi possível calcular o MACD")
 
 with tab6:  # Exportar
     st.subheader("📤 Exportar Dados Completo")
@@ -877,7 +952,8 @@ with tab6:  # Exportar
         pdf.cell(200, 10, txt="Relatório BTC Dashboard Pro+", ln=1, align='C')
         
         # Adicionar conteúdo
-        pdf.cell(200, 10, txt=f"Preço Atual: ${data['prices']['price'].iloc[-1]:,.2f}", ln=1)
+        if 'prices' in data and not data['prices'].empty:
+            pdf.cell(200, 10, txt=f"Preço Atual: ${data['prices']['price'].iloc[-1]:,.2f}", ln=1)
         pdf.cell(200, 10, txt=f"Sinal Atual: {final_verdict}", ln=1)
         pdf.cell(200, 10, txt=f"Configurações:", ln=1)
         pdf.cell(200, 10, txt=f"- Período RSI: {st.session_state.user_settings['rsi_window']}", ln=1)
@@ -892,8 +968,10 @@ with tab6:  # Exportar
     if st.button("Exportar Dados para Excel"):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
             with pd.ExcelWriter(tmp.name) as writer:
-                data['prices'].to_excel(writer, sheet_name="BTC Prices")
-                traditional_assets.to_excel(writer, sheet_name="Traditional Assets")
+                if 'prices' in data and not data['prices'].empty:
+                    data['prices'].to_excel(writer, sheet_name="BTC Prices")
+                if not traditional_assets.empty:
+                    traditional_assets.to_excel(writer, sheet_name="Traditional Assets")
             st.success(f"Dados exportados! [Download aqui]({tmp.name})")
 
 # ======================
