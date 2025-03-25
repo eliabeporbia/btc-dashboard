@@ -1,17 +1,16 @@
-# Dependências principais
+# CORE
 streamlit==1.29.0
 pandas==2.1.4
 plotly==5.18.0
 python-dotenv==1.0.0
 requests==2.31.0
 
-# Novas dependências para funcionalidades avançadas
-pygame==2.5.2          # Alertas sonoros
-transformers==4.36.2   # Análise de sentimentos (NLP)
-fpdf2==2.7.7           # Relatórios PDF
-numpy==1.26.2          # Processamento numérico
-tqdm==4.66.1           # Progress bars (usado pelo transformers)
+# NLP (Análise de Sentimento)
+transformers==4.30.2  # Versão mais leve
+sentencepiece==0.1.99  # Necessário para o transformers
 
-# Dependências opcionais (se for usar APIs específicas)
-python-binance==1.0.19  # API Binance (opcional)
-whale-alert==2.1.0      # Monitoramento de whales (opcional)
+# PDF
+fpdf2==2.7.7
+
+# Sons (Alternativa ao PyGame)
+simpleaudio==1.0.4  # Mais compatível com a nuvem
