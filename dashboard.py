@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import numpy as np
 from fpdf import FPDF
-import talib  # Biblioteca para indicadores técnicos
+import talib
 
 # Configuração do painel
 st.set_page_config(layout="wide", page_title="BTC Super Dashboard Pro")
@@ -46,7 +46,7 @@ def load_data():
         data['difficulty'] = pd.DataFrame(diff_response.json()["values"])
         data['difficulty']["date"] = pd.to_datetime(data['difficulty']["x"], unit="s")
         
-        # Dados de exchanges (simulados + real)
+        # Dados de exchanges
         data['exchanges'] = {
             "binance": {"inflow": 1500, "outflow": 1200, "reserves": 500000},
             "coinbase": {"inflow": 800, "outflow": 750, "reserves": 350000},
@@ -116,7 +116,7 @@ def generate_signals(data):
     
     # 7. Whale Activity
     if 'whale_alert' in data and not data['whale_alert'].empty:
-        whale_ratio = data['whale_alert']['amount'].sum() / (24*30)  # Normalizado para 30 dias
+        whale_ratio = data['whale_alert']['amount'].sum() / (24*30)
         whale_signal = "COMPRA" if whale_ratio < 100 else "VENDA"
         signals.append(("Atividade de Whales", whale_signal, f"{whale_ratio:.1f} BTC/dia"))
     
@@ -125,7 +125,7 @@ def generate_signals(data):
     sell_signals = sum(1 for s in signals if s[1] == "VENDA")
     
     # Análise consolidada
-    if buy_signals >= sell_signals + 3:  # Diferença de 3 sinais
+    if buy_signals >= sell_signals + 3:
         final_verdict = "✅ FORTE COMPRA"
     elif buy_signals > sell_signals:
         final_verdict = "📈 COMPRA"
@@ -196,7 +196,6 @@ st.subheader(f"📊 Resumo de Sinais (COMPRA: {buy_signals} | VENDA: {sell_signa
 if signals:
     df_signals = pd.DataFrame(signals, columns=["Indicador", "Sinal", "Valor"])
     
-    # Função para colorir as linhas
     def color_signal(val):
         color = '#4CAF50' if val == "COMPRA" else '#F44336' if val == "VENDA" else '#FFC107'
         return f'background-color: {color}'
@@ -220,7 +219,6 @@ with tab1:
 
 with tab2:
     if not data['prices'].empty:
-        # Gráfico de RSI
         fig_rsi = px.line(data['prices'], x="date", y="RSI", 
                          title="RSI (14 dias)", 
                          range_y=[0, 100])
@@ -228,7 +226,6 @@ with tab2:
         fig_rsi.add_hline(y=70, line_dash="dash", line_color="red")
         st.plotly_chart(fig_rsi, use_container_width=True)
         
-        # Gráfico MACD
         fig_macd = px.line(data['prices'], x="date", y="MACD", 
                           title="MACD")
         fig_macd.add_hline(y=0, line_color="black")
