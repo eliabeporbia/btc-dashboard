@@ -13,10 +13,10 @@ import tempfile
 # CONFIGURAÇÕES INICIAIS
 # ======================
 st.set_page_config(layout="wide", page_title="BTC Super Dashboard Pro+")
-st.title("🚀 BTC Super Dashboard Pro+ - Confluência de Indicadores")
+st.title("🚀 BTC Super Dashboard Pro+ - Edição Premium")
 
 # ======================
-# FUNÇÕES DE CÁLCULO (MANTIDAS)
+# FUNÇÕES DE CÁLCULO
 # ======================
 
 def calculate_ema(series, window):
@@ -84,7 +84,7 @@ def get_asset_today_change():
         }
 
 # ======================
-# CARREGAMENTO DE DADOS (MANTIDO ORIGINAL)
+# CARREGAMENTO DE DADOS
 # ======================
 
 @st.cache_data(ttl=3600)
@@ -150,7 +150,7 @@ def load_data():
     return data
 
 # ======================
-# GERADOR DE SINAIS (ATUALIZADO COM CONFLUÊNCIA)
+# GERADOR DE SINAIS (COM CONFLUÊNCIA)
 # ======================
 
 def generate_signals(data):
@@ -161,7 +161,7 @@ def generate_signals(data):
         last_price = data['prices']['price'].iloc[-1]
         last_rsi = data['prices']['RSI'].iloc[-1]
         
-        # 1. Sinais de Médias Móveis (original)
+        # 1. Sinais de Médias Móveis
         signals.append(("Preço vs MA7", "COMPRA" if last_price > data['prices']['MA7'].iloc[-1] else "VENDA", 
                        f"{(last_price/data['prices']['MA7'].iloc[-1]-1):.2%}"))
         
@@ -183,8 +183,6 @@ def generate_signals(data):
         signals.append(("📢 Sentimento", "COMPRA" if sentiment['value'] < 25 else "VENDA" if sentiment['value'] > 75 else "NEUTRO", 
                        f"{sentiment['value']} ({sentiment['sentiment']})"))
     
-    # [...] (restante dos sinais originais mantidos)
-
     # Contagem de sinais
     buy_signals = sum(1 for s in signals if "COMPRA" in s[1])
     sell_signals = sum(1 for s in signals if "VENDA" in s[1])
@@ -204,7 +202,7 @@ def generate_signals(data):
     return signals, final_verdict, buy_signals, sell_signals
 
 # ======================
-# INTERFACE DO USUÁRIO (COM SETAS DE COMPARAÇÃO)
+# INTERFACE DO USUÁRIO
 # ======================
 
 # Carregar dados
@@ -218,18 +216,18 @@ st.sidebar.subheader("🔧 Parâmetros Técnicos")
 rsi_window = st.sidebar.slider("Período do RSI", 7, 21, 14)
 bb_window = st.sidebar.slider("Bandas de Bollinger (dias)", 10, 50, 20)
 
-# Métricas com setas
+# Métricas com setas (CORRIGIDO O ERRO DE SYNTAX)
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Preço BTC", f"${data['prices']['price'].iloc[-1]:,.2f}")
 col2.metric("S&P 500 (Hoje)", 
-           f"{asset_changes['SP500']['arrow']} {abs(asset_changes['SP500']['change']*100:.2f}%",
+           f"{asset_changes['SP500']['arrow']} {abs(asset_changes['SP500']['change'])*100:.2f}%",
            "Alta → Risco" if asset_changes['SP500']['change'] > 0 else "Baixa → Hedge")
 col3.metric("OURO (Hoje)", 
-           f"{asset_changes['OURO']['arrow']} {abs(asset_changes['OURO']['change']*100:.2f}%",
+           f"{asset_changes['OURO']['arrow']} {abs(asset_changes['OURO']['change'])*100:.2f}%",
            "Alta → Hedge" if asset_changes['OURO']['change'] > 0 else "Baixa → Risco")
 col4.metric("Análise Final", final_verdict)
 
-# Tabela de Sinais (com confluência)
+# Tabela de Sinais
 st.subheader(f"📈 Sinais de Mercado (COMPRA: {buy_signals} | VENDA: {sell_signals})")
 df_signals = pd.DataFrame(signals, columns=["Indicador", "Sinal", "Valor"])
 
@@ -248,4 +246,30 @@ st.dataframe(
     use_container_width=True
 )
 
-# [...] (restante do código original mantido - abas, gráficos, etc.)
+# Abas principais
+tab1, tab2, tab3 = st.tabs(["📉 Preço", "📊 Técnico", "🐳 Whales"])
+
+with tab1:
+    if not data['prices'].empty:
+        fig = px.line(data['prices'], x="date", y=["price", "MA7", "MA30"], title="Preço BTC")
+        st.plotly_chart(fig, use_container_width=True)
+
+with tab2:
+    if not data['prices'].empty:
+        fig_rsi = px.line(data['prices'], x="date", y="RSI", title="RSI (14 dias)")
+        fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
+        fig_rsi.add_hline(y=70, line_dash="dash", line_color="red")
+        st.plotly_chart(fig_rsi, use_container_width=True)
+
+with tab3:
+    if 'whale_alert' in data:
+        st.dataframe(data['whale_alert'], hide_index=True)
+
+# Rodapé
+st.sidebar.markdown("""
+**📌 Legenda:**
+- 🟢 **COMPRA**: Indicador positivo
+- 🔴 **VENDA**: Indicador negativo
+- 🟡 **NEUTRO**: Sem sinal claro
+- ✅ **FORTE COMPRA**: Múltiplas confirmações
+""")
