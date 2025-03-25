@@ -200,7 +200,7 @@ if signals:
         color = '#4CAF50' if val == "COMPRA" else '#F44336' if val == "VENDA" else '#FFC107'
         return f'background-color: {color}'
     
-    st.dataframe(
+    st.dataframe
         df_signals.style.applymap(color_signal, subset=["Sinal"]),
         hide_index=True,
         use_container_width=True,
