@@ -11,6 +11,7 @@ import tempfile
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import ParameterGrid
 from itertools import product
+import re
 
 # ======================
 # CONFIGURAÇÕES INICIAIS
@@ -98,17 +99,14 @@ def simulate_event(event, price_series):
     
     try:
         if event == "Halving":
-            # Efeito histórico: +120% em 1 ano após halving
-            growth = np.log(2.2) / 365  # Crescimento diário composto
+            growth = np.log(2.2) / 365
             simulated = price_series * (1 + growth) ** np.arange(len(price_series))
             return simulated
             
         elif event == "Crash":
-            # -30% instantâneo
             return price_series * 0.7
             
         elif event == "ETF Approval":
-            # +50% instantâneo
             return price_series * 1.5
             
         else:
@@ -186,13 +184,11 @@ def backtest_rsi_strategy(df, rsi_window=14, overbought=70, oversold=30):
     
     df = df.copy()
     
-    # Garantir colunas necessárias
     if 'MA30' not in df.columns:
         df['MA30'] = df['price'].rolling(30).mean()
     
     df['RSI'] = calculate_rsi(df['price'], rsi_window)
     
-    # Sinais com confirmação
     df['signal'] = 0
     df.loc[(df['RSI'] < oversold) & (df['price'] > df['MA30']), 'signal'] = 1
     df.loc[(df['RSI'] > overbought) & (df['price'] < df['MA30']), 'signal'] = -1
@@ -212,7 +208,6 @@ def backtest_macd_strategy(df, fast=12, slow=26, signal=9):
     df.loc[df['MACD'] > 0, 'signal'] = 1
     df.loc[df['MACD'] < 0, 'signal'] = -1
     
-    # Sinal forte no cruzamento
     df.loc[(df['MACD'] > df['MACD_Signal']) & (df['MACD'] > 0), 'signal'] = 1.5
     df.loc[(df['MACD'] < df['MACD_Signal']) & (df['MACD'] < 0), 'signal'] = -1.5
     
@@ -313,28 +308,22 @@ def calculate_metrics(df):
     if len(returns) == 0 or len(buy_hold_returns) == 0:
         return metrics
     
-    # Retornos
     metrics['Retorno Estratégia'] = df['strategy_cumulative'].iloc[-1] - 1 if 'strategy_cumulative' in df.columns else 0
     metrics['Retorno Buy & Hold'] = df['cumulative_return'].iloc[-1] - 1 if 'cumulative_return' in df.columns else 0
     
-    # Volatilidade
     metrics['Vol Estratégia'] = returns.std() * np.sqrt(365) if len(returns) > 1 else 0
     metrics['Vol Buy & Hold'] = buy_hold_returns.std() * np.sqrt(365) if len(buy_hold_returns) > 1 else 0
     
-    # Razão Sharpe
     metrics['Sharpe Estratégia'] = (returns.mean() / returns.std() * np.sqrt(365)) if returns.std() != 0 else 0
     metrics['Sharpe Buy & Hold'] = (buy_hold_returns.mean() / buy_hold_returns.std() * np.sqrt(365)) if buy_hold_returns.std() != 0 else 0
     
-    # Drawdown
     cum_returns = (1 + returns).cumprod()
     peak = cum_returns.expanding(min_periods=1).max()
     drawdown = (cum_returns - peak) / peak
     metrics['Max Drawdown'] = drawdown.min() if len(drawdown) > 0 else 0
     
-    # Win Rate
     metrics['Win Rate'] = len(returns[returns > 0]) / len(returns) if len(returns) > 0 else 0
     
-    # Taxa de Acerto
     trades = df[df['signal'] != 0] if 'signal' in df.columns else pd.DataFrame()
     metrics['Taxa Acerto'] = len(trades[trades['strategy_return'] > 0]) / len(trades) if len(trades) > 0 else 0
     
@@ -407,7 +396,6 @@ def optimize_strategy_parameters(data, strategy_name, param_space):
 def load_data():
     data = {}
     try:
-        # Preço do Bitcoin (últimos 90 dias)
         url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=90"
         response = requests.get(url, timeout=15)
         response.raise_for_status()
@@ -416,10 +404,8 @@ def load_data():
         data['prices'] = pd.DataFrame(market_data["prices"], columns=["timestamp", "price"])
         data['prices']["date"] = pd.to_datetime(data['prices']["timestamp"], unit="ms")
         
-        # Volume (simulado para exemplo)
         data['prices']['volume'] = np.random.randint(10000, 50000, size=len(data['prices']))
         
-        # Calculando indicadores técnicos com tratamento de erro
         price_series = data['prices']['price']
         volume_series = data['prices']['volume']
         
@@ -440,7 +426,6 @@ def load_data():
             data['prices']['OBV'] = calculate_obv(price_series, volume_series)
             data['prices']['Stoch_K'], data['prices']['Stoch_D'] = calculate_stochastic(price_series)
         
-        # Hashrate (taxa de hash)
         try:
             hr_response = requests.get("https://api.blockchain.info/charts/hash-rate?format=json&timespan=3months", timeout=10)
             hr_response.raise_for_status()
@@ -449,7 +434,6 @@ def load_data():
         except Exception:
             data['hashrate'] = pd.DataFrame()
         
-        # Dificuldade de mineração
         try:
             diff_response = requests.get("https://api.blockchain.info/charts/difficulty?timespan=2years&format=json", timeout=10)
             diff_response.raise_for_status()
@@ -458,14 +442,12 @@ def load_data():
         except Exception:
             data['difficulty'] = pd.DataFrame()
         
-        # Dados simulados de exchanges
         data['exchanges'] = {
             "binance": {"inflow": 1500, "outflow": 1200, "reserves": 500000},
             "coinbase": {"inflow": 800, "outflow": 750, "reserves": 350000},
             "kraken": {"inflow": 600, "outflow": 550, "reserves": 200000}
         }
         
-        # Atividade de "baleias" (grandes investidores)
         data['whale_alert'] = pd.DataFrame({
             "date": [datetime.now() - timedelta(hours=h) for h in [1, 3, 5, 8, 12]],
             "amount": [250, 180, 120, 300, 150],
@@ -497,7 +479,6 @@ def generate_signals(data, rsi_window=14, bb_window=20):
     try:
         last_price = data['prices']['price'].iloc[-1]
         
-        # 1. Sinais de Médias Móveis
         ma_signals = []
         for window in st.session_state.user_settings['ma_windows']:
             col_name = f'MA{window}'
@@ -521,7 +502,6 @@ def generate_signals(data, rsi_window=14, bb_window=20):
                 change = (values[0]/values[1] - 1)
             signals.append((name, signal, f"{change:.2%}"))
         
-        # 2. RSI com período personalizado
         rsi_col = f'RSI_{rsi_window}'
         if rsi_col not in data['prices'].columns:
             data['prices'][rsi_col] = calculate_rsi(data['prices']['price'], rsi_window)
@@ -531,13 +511,11 @@ def generate_signals(data, rsi_window=14, bb_window=20):
             rsi_signal = "COMPRA" if rsi < 30 else "VENDA" if rsi > 70 else "NEUTRO"
             signals.append((f"RSI ({rsi_window})", rsi_signal, f"{rsi:.2f}"))
         
-        # 3. MACD
         if 'MACD' in data['prices'].columns and not data['prices']['MACD'].isna().all():
             macd = data['prices']['MACD'].iloc[-1]
             macd_signal = "COMPRA" if macd > 0 else "VENDA"
             signals.append(("MACD", macd_signal, f"{macd:.2f}"))
         
-        # 4. Bandas de Bollinger
         bb_upper_col = f'BB_Upper_{bb_window}'
         bb_lower_col = f'BB_Lower_{bb_window}'
         
@@ -552,7 +530,6 @@ def generate_signals(data, rsi_window=14, bb_window=20):
             bb_signal = "COMPRA" if last_price < bb_lower else "VENDA" if last_price > bb_upper else "NEUTRO"
             signals.append((f"Bollinger Bands ({bb_window})", bb_signal, f"Atual: ${last_price:,.0f}"))
         
-        # 5. Volume
         if 'volume' in data['prices'].columns:
             volume_ma = data['prices']['volume'].rolling(20).mean().iloc[-1]
             last_volume = data['prices']['volume'].iloc[-1]
@@ -560,14 +537,12 @@ def generate_signals(data, rsi_window=14, bb_window=20):
             volume_signal = "COMPRA" if volume_ratio > 1.5 and last_price > data['prices']['price'].iloc[-2] else "VENDA" if volume_ratio > 1.5 and last_price < data['prices']['price'].iloc[-2] else "NEUTRO"
             signals.append(("Volume (20MA)", volume_signal, f"{volume_ratio:.1f}x"))
         
-        # 6. OBV
         if 'OBV' in data['prices'].columns:
             obv_ma = data['prices']['OBV'].rolling(20).mean().iloc[-1]
             last_obv = data['prices']['OBV'].iloc[-1]
             obv_signal = "COMPRA" if last_obv > obv_ma and last_price > data['prices']['price'].iloc[-2] else "VENDA" if last_obv < obv_ma and last_price < data['prices']['price'].iloc[-2] else "NEUTRO"
             signals.append(("OBV (20MA)", obv_signal, f"{last_obv/1e6:.1f}M"))
         
-        # 7. Stochastic
         if 'Stoch_K' in data['prices'].columns and 'Stoch_D' in data['prices'].columns:
             stoch_k = data['prices']['Stoch_K'].iloc[-1]
             stoch_d = data['prices']['Stoch_D'].iloc[-1]
@@ -578,11 +553,9 @@ def generate_signals(data, rsi_window=14, bb_window=20):
         st.error(f"Erro ao gerar sinais: {str(e)}")
         return signals, "➖ ERRO NA ANÁLISE", buy_signals, sell_signals
     
-    # Contagem de sinais
     buy_signals = sum(1 for s in signals if s[1] == "COMPRA")
     sell_signals = sum(1 for s in signals if s[1] == "VENDA")
     
-    # Análise consolidada
     if buy_signals >= sell_signals + 3:
         final_verdict = "✅ FORTE COMPRA"
     elif buy_signals > sell_signals:
@@ -600,10 +573,8 @@ def generate_signals(data, rsi_window=14, bb_window=20):
 # INTERFACE DO USUÁRIO (REVISADA)
 # ======================
 
-# Carregar dados
 data = load_data()
 
-# Configurações padrão
 DEFAULT_SETTINGS = {
     'rsi_window': 14,
     'bb_window': 20,
@@ -611,17 +582,13 @@ DEFAULT_SETTINGS = {
     'email': ''
 }
 
-# Inicializar session_state para configurações
 if 'user_settings' not in st.session_state:
     st.session_state.user_settings = DEFAULT_SETTINGS.copy()
 
-# Sidebar - Controles do Usuário
 st.sidebar.header("⚙️ Painel de Controle")
 
-# Configurações dos indicadores
 st.sidebar.subheader("🔧 Parâmetros Técnicos")
 
-# Usar valores do session_state como padrão
 rsi_window = st.sidebar.slider(
     "Período do RSI", 
     7, 21, 
@@ -640,14 +607,12 @@ ma_windows = st.sidebar.multiselect(
     st.session_state.user_settings['ma_windows']
 )
 
-# Configurações de alertas
 st.sidebar.subheader("🔔 Alertas Automáticos")
 email = st.sidebar.text_input(
     "E-mail para notificações", 
     st.session_state.user_settings['email']
 )
 
-# Botões de controle
 col1, col2 = st.sidebar.columns(2)
 with col1:
     if st.button("💾 Salvar Configurações"):
@@ -668,7 +633,6 @@ with col2:
 if st.sidebar.button("Ativar Monitoramento Contínuo"):
     st.sidebar.success("Alertas ativados!")
 
-# Gerar sinais com configurações atuais
 signals, final_verdict, buy_signals, sell_signals = generate_signals(
     data, 
     rsi_window=st.session_state.user_settings['rsi_window'],
@@ -678,10 +642,8 @@ signals, final_verdict, buy_signals, sell_signals = generate_signals(
 sentiment = get_market_sentiment()
 traditional_assets = get_traditional_assets()
 
-# Seção principal
 st.header("📊 Painel Integrado BTC Pro+")
 
-# Linha de métricas
 col1, col2, col3, col4, col5 = st.columns(5)
 
 if 'prices' in data and not data['prices'].empty:
@@ -691,7 +653,6 @@ else:
 
 col2.metric("Sentimento", f"{sentiment['value']}/100", sentiment['sentiment'])
 
-# S&P 500 com %
 if not traditional_assets.empty:
     sp500_data = traditional_assets[traditional_assets['asset']=='S&P 500']
     if not sp500_data.empty:
@@ -704,7 +665,6 @@ if not traditional_assets.empty:
 else:
     col3.metric("S&P 500", "N/A")
 
-# Ouro com %
 if not traditional_assets.empty:
     ouro_data = traditional_assets[traditional_assets['asset']=='Ouro']
     if not ouro_data.empty:
@@ -717,10 +677,8 @@ if not traditional_assets.empty:
 else:
     col4.metric("Ouro", "N/A")
 
-# Análise Final
 col5.metric("Análise Final", final_verdict)
 
-# Abas principais
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📈 Mercado", 
     "🆚 Comparativos", 
@@ -730,7 +688,7 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📤 Exportar"
 ])
 
-with tab1:  # Mercado
+with tab1:
     col1, col2 = st.columns([3, 2])
     
     with col1:
@@ -816,10 +774,9 @@ with tab1:  # Mercado
                    {'range': [75, 100], 'color': "green"}]}))
     st.plotly_chart(fig_sent, use_container_width=True)
 
-with tab2:  # Comparativos
+with tab2:
     st.subheader("📌 BTC vs Ativos Tradicionais")
     if not traditional_assets.empty:
-        # Normalizar os dados para começar em 100
         normalized = traditional_assets.copy()
         for asset in normalized['asset'].unique():
             mask = normalized['asset'] == asset
@@ -837,25 +794,22 @@ with tab2:  # Comparativos
     else:
         st.warning("Dados comparativos não disponíveis")
 
-with tab3:  # Backtesting (REVISADO E APRIMORADO)
+with tab3:
     st.subheader("🧪 Backtesting Avançado")
     
     if 'prices' not in data or data['prices'].empty:
         st.error("Dados de preços não disponíveis para backtesting")
         st.stop()
     
-    # Seletor de estratégia
     strategy = st.selectbox(
         "Escolha sua Estratégia:",
         ["RSI", "MACD", "Bollinger", "EMA Cross", "Volume", "OBV", "Stochastic"],
         key="backtest_strategy"
     )
     
-    # Garantir colunas necessárias
     if 'MA30' not in data['prices'].columns:
         data['prices']['MA30'] = data['prices']['price'].rolling(30).mean()
     
-    # Parâmetros dinâmicos
     params_col1, params_col2 = st.columns(2)
     df = pd.DataFrame()
     
@@ -947,17 +901,14 @@ with tab3:  # Backtesting (REVISADO E APRIMORADO)
         st.error("Não foi possível executar o backtesting. Dados insuficientes.")
         st.stop()
     
-    # Calcular métricas
     metrics = calculate_metrics(df)
     
     if not metrics:
         st.error("Não foi possível calcular métricas de performance.")
         st.stop()
     
-    # Mostrar resultados
     st.subheader("📊 Resultados do Backtesting")
     
-    # Gráfico comparativo
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=df['date'], y=df['strategy_cumulative'],
@@ -976,7 +927,6 @@ with tab3:  # Backtesting (REVISADO E APRIMORADO)
     )
     st.plotly_chart(fig, use_container_width=True)
     
-    # Métricas de performance
     st.subheader("📈 Métricas de Performance")
     
     col1, col2, col3 = st.columns(3)
@@ -998,7 +948,6 @@ with tab3:  # Backtesting (REVISADO E APRIMORADO)
     with col6:
         st.metric("Taxa de Acerto", f"{metrics['Taxa Acerto']:.2%}")
     
-    # Otimização de parâmetros
     st.subheader("⚙️ Otimização Automática de Parâmetros")
     if st.checkbox("🔍 Executar Otimização (Pode demorar)"):
         with st.spinner("Otimizando parâmetros..."):
@@ -1058,7 +1007,7 @@ with tab3:  # Backtesting (REVISADO E APRIMORADO)
             else:
                 st.warning("Não foi possível encontrar parâmetros otimizados")
 
-with tab4:  # Cenários
+with tab4:
     st.subheader("🌍 Simulação de Eventos")
     event = st.selectbox(
         "Selecione um Cenário:", 
@@ -1091,11 +1040,10 @@ with tab4:  # Cenários
         except Exception as e:
             st.error(f"Erro ao executar simulação: {str(e)}")
 
-with tab5:  # Técnico
+with tab5:
     if 'prices' not in data or data['prices'].empty:
         st.warning("Dados técnicos não disponíveis")
     else:
-        # Gráfico RSI com período personalizado
         rsi_window = st.session_state.user_settings['rsi_window']
         rsi_col = f'RSI_{rsi_window}'
         if rsi_col not in data['prices'].columns:
@@ -1111,7 +1059,6 @@ with tab5:  # Técnico
         else:
             st.warning("Não foi possível calcular o RSI")
         
-        # Gráfico Bollinger Bands
         bb_window = st.session_state.user_settings['bb_window']
         bb_upper_col = f'BB_Upper_{bb_window}'
         bb_lower_col = f'BB_Lower_{bb_window}'
@@ -1140,7 +1087,6 @@ with tab5:  # Técnico
         else:
             st.warning("Não foi possível calcular as Bandas de Bollinger")
         
-        # Gráfico MACD
         if 'MACD' in data['prices'].columns and not data['prices']['MACD'].isna().all():
             fig_macd = go.Figure()
             fig_macd.add_trace(go.Scatter(
@@ -1156,7 +1102,6 @@ with tab5:  # Técnico
         else:
             st.warning("Não foi possível calcular o MACD")
         
-        # Gráfico Volume
         if 'volume' in data['prices'].columns:
             fig_vol = px.bar(data['prices'], x="date", y="volume", 
                            title="Volume de Negociação")
@@ -1168,7 +1113,6 @@ with tab5:  # Técnico
             ))
             st.plotly_chart(fig_vol, use_container_width=True)
         
-        # Gráfico OBV
         if 'OBV' in data['prices'].columns:
             fig_obv = px.line(data['prices'], x="date", y="OBV", 
                             title="On-Balance Volume (OBV)")
@@ -1180,7 +1124,6 @@ with tab5:  # Técnico
             ))
             st.plotly_chart(fig_obv, use_container_width=True)
         
-        # Gráfico Stochastic
         if 'Stoch_K' in data['prices'].columns and 'Stoch_D' in data['prices'].columns:
             fig_stoch = go.Figure()
             fig_stoch.add_trace(go.Scatter(
@@ -1198,30 +1141,37 @@ with tab5:  # Técnico
             fig_stoch.update_layout(title="Stochastic Oscillator (14,3)")
             st.plotly_chart(fig_stoch, use_container_width=True)
 
-with tab6:  # Exportar
+with tab6:
     st.subheader("📤 Exportar Dados Completo")
+    
+    def clean_text(text):
+        """Remove emojis e caracteres não ASCII"""
+        return re.sub(r'[^\x00-\x7F]+', '', str(text))
     
     if st.button("Gerar Relatório PDF"):
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Arial", size=12)
-        pdf.cell(200, 10, txt="Relatório BTC Dashboard Pro+", ln=1, align='C')
         
-        # Adicionar conteúdo
+        # Adicionar conteúdo com texto limpo
         if 'prices' in data and not data['prices'].empty:
             pdf.cell(200, 10, txt=f"Preço Atual: ${data['prices']['price'].iloc[-1]:,.2f}", ln=1)
-        pdf.cell(200, 10, txt=f"Sinal Atual: {final_verdict}", ln=1)
-        pdf.cell(200, 10, txt=f"Configurações:", ln=1)
+        
+        clean_verdict = clean_text(final_verdict)
+        pdf.cell(200, 10, txt=f"Sinal Atual: {clean_verdict}", ln=1)
+        
+        pdf.cell(200, 10, txt="Configurações:", ln=1)
         pdf.cell(200, 10, txt=f"- Período RSI: {st.session_state.user_settings['rsi_window']}", ln=1)
         pdf.cell(200, 10, txt=f"- BB Window: {st.session_state.user_settings['bb_window']}", ln=1)
         pdf.cell(200, 10, txt=f"- Médias Móveis: {', '.join(map(str, st.session_state.user_settings['ma_windows']))}", ln=1)
         
-        # Sinais técnicos
         pdf.cell(200, 10, txt="Sinais Técnicos:", ln=1)
         for signal in signals:
-            pdf.cell(200, 10, txt=f"- {signal[0]}: {signal[1]} ({signal[2]})", ln=1)
+            clean_name = clean_text(signal[0])
+            clean_value = clean_text(signal[1])
+            clean_detail = clean_text(signal[2])
+            pdf.cell(200, 10, txt=f"- {clean_name}: {clean_value} ({clean_detail})", ln=1)
         
-        # Salvar temporariamente
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             pdf.output(tmp.name)
             st.success(f"Relatório gerado! [Download aqui]({tmp.name})")
@@ -1235,9 +1185,6 @@ with tab6:  # Exportar
                     traditional_assets.to_excel(writer, sheet_name="Traditional Assets")
             st.success(f"Dados exportados! [Download aqui]({tmp.name})")
 
-# ======================
-# RODAPÉ
-# ======================
 st.sidebar.markdown("""
 **📌 Legenda:**
 - 🟢 **COMPRA**: Indicador positivo
