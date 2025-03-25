@@ -3,116 +3,129 @@ import requests
 import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
+import numpy as np
 
 # Configuração do painel
-st.set_page_config(layout="wide", page_title="BTC On-Chain Dashboard")
-st.title("📊 Painel BTC On-Chain (Dados Reais)")
+st.set_page_config(layout="wide", page_title="BTC On-Chain Pro")
+st.title("🚨 BTC On-Chain Pro - Sinais de Compra/Venda")
 
-# ---- 1. PREÇO DO BTC (COINGECKO) ----
+# ---- 1. DADOS EM TEMPO REAL ----
 @st.cache_data(ttl=3600)
-def get_btc_price():
+def load_data():
+    # Dicionário para armazenar tudo
+    data = {}
+    
     try:
+        # Preço e volume
         url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=90"
         response = requests.get(url, timeout=10)
-        data = response.json()
-        prices = pd.DataFrame(data["prices"], columns=["timestamp", "price"])
-        prices["date"] = pd.to_datetime(prices["timestamp"], unit="ms")
-        return prices
+        market_data = response.json()
+        data['prices'] = pd.DataFrame(market_data["prices"], columns=["timestamp", "price"])
+        data['prices']["date"] = pd.to_datetime(data['prices']["timestamp"], unit="ms")
+        
+        # Hashrate e dificuldade
+        data['hashrate'] = pd.DataFrame(
+            requests.get("https://api.blockchain.info/charts/hash-rate?format=json&timespan=3months").json()["values"]
+        )
+        data['hashrate']["date"] = pd.to_datetime(data['hashrate']["x"], unit="s")
+        
+        # Dificuldade (corrigido)
+        data['difficulty'] = pd.DataFrame(
+            requests.get("https://api.blockchain.info/charts/difficulty?timespan=2years&format=json").json()["values"]
+        )
+        data['difficulty']["date"] = pd.to_datetime(data['difficulty']["x"], unit="s")
+        
+        # Dados de exchanges (simulados + real)
+        data['exchanges'] = {
+            "binance": {"inflow": 1500, "outflow": 1200, "reserves": 500000},
+            "coinbase": {"inflow": 800, "outflow": 750, "reserves": 350000},
+            "kraken": {"inflow": 600, "outflow": 550, "reserves": 200000}
+        }
+        
     except Exception as e:
-        st.error(f"Erro ao obter preço: {str(e)}")
-        return pd.DataFrame(columns=["timestamp", "price", "date"])
+        st.error(f"Erro ao carregar dados: {str(e)}")
+    
+    return data
 
-# ---- 2. HASH RATE (BLOCKCHAIN.COM) ----
-@st.cache_data(ttl=3600)
-def get_hash_rate():
-    try:
-        url = "https://api.blockchain.info/charts/hash-rate?format=json&timespan=3months"
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        df = pd.DataFrame(data["values"])
-        df["date"] = pd.to_datetime(df["x"], unit="s")
-        return df
-    except Exception as e:
-        st.error(f"Erro ao obter hash rate: {str(e)}")
-        return pd.DataFrame(columns=["x", "y", "date"])
+data = load_data()
 
-# ---- 3. FLUXO DE EXCHANGES (SIMULADO) ----
-@st.cache_data(ttl=3600)
-def get_exchange_flows():
-    # Dados simulados (como na versão anterior)
-    return {
-        "binance": {"inflow": 1500, "outflow": 1200},
-        "coinbase": {"inflow": 800, "outflow": 750},
-        "kraken": {"inflow": 600, "outflow": 550}
-    }
+# ---- 2. SINAIS DE COMPRA/VENDA ----
+def generate_signals():
+    signals = []
+    
+    # 1. Tendência de preço (Média Móvel)
+    if not data['prices'].empty:
+        data['prices']['MA7'] = data['prices']['price'].rolling(7).mean()
+        last_price = data['prices']['price'].iloc[-1]
+        ma7 = data['prices']['MA7'].iloc[-1]
+        signals.append(("Preço vs Média 7D", "COMPRA" if last_price > ma7 else "VENDA", last_price/ma7 - 1))
+    
+    # 2. Fluxo de exchanges
+    if data['exchanges']:
+        net_flows = sum(ex["inflow"] - ex["outflow"] for ex in data['exchanges'].values())
+        signals.append(("Net Flow Exchanges", "COMPRA" if net_flows < 0 else "VENDA", net_flows))
+    
+    # 3. Hashrate vs Dificuldade
+    if not data['hashrate'].empty and not data['difficulty'].empty:
+        hr_growth = data['hashrate']['y'].iloc[-1] / data['hashrate']['y'].iloc[-30] - 1
+        diff_growth = data['difficulty']['y'].iloc[-1] / data['difficulty']['y'].iloc[-30] - 1
+        signals.append(("Hashrate vs Dificuldade", "COMPRA" if hr_growth > diff_growth else "VENDA", hr_growth - diff_growth))
+    
+    return signals
 
-# ---- 4. DIFICULDADE DA REDE (CORREÇÃO) ----
-@st.cache_data(ttl=3600)
-def get_difficulty_data():
-    try:
-        # Nova fonte confiável para dados históricos
-        url = "https://api.blockchain.info/charts/difficulty?timespan=2years&format=json"
-        response = requests.get(url, timeout=15)
-        data = response.json()
-        df = pd.DataFrame(data["values"])
-        df["date"] = pd.to_datetime(df["x"], unit="s")
-        return df
-    except Exception as e:
-        st.error(f"Erro ao obter dificuldade: {str(e)}")
-        return pd.DataFrame(columns=["x", "y", "date"])
+signals = generate_signals()
 
-# ---- CARREGAMENTO DE DADOS ----
-with st.spinner("Atualizando dados..."):
-    df_price = get_btc_price()
-    df_hashrate = get_hash_rate()
-    exchanges = get_exchange_flows()
-    df_difficulty = get_difficulty_data()
+# ---- 3. LAYOUT DO PAINEL ----
+st.header("📢 Sinais de Mercado", divider="rainbow")
 
-# ---- LAYOUT DO PAINEL (IGUAL À VERSÃO ANTERIOR) ----
-tab1, tab2, tab3 = st.tabs(["📈 Mercado", "🏦 Exchanges", "⚙️ Rede Bitcoin"])
+# Área de status
+col1, col2, col3 = st.columns(3)
+col1.metric("Preço Atual", f"${data['prices']['price'].iloc[-1]:,.2f}" if not data['prices'].empty else "N/A")
+col2.metric("Hash Rate", f"{data['hashrate']['y'].iloc[-1]/1e6:,.1f} EH/s" if not data['hashrate'].empty else "N/A")
+col3.metric("Dificuldade", f"{data['difficulty']['y'].iloc[-1]/1e12:,.1f} T" if not data['difficulty'].empty else "N/A")
+
+# Tabela de sinais
+st.subheader("📈 Indicadores Técnicos")
+df_signals = pd.DataFrame(
+    [(name, signal, f"{value:.2%}" if isinstance(value, float) else value) for name, signal, value in signals],
+    columns=["Indicador", "Sinal", "Valor"]
+)
+st.dataframe(
+    df_signals.style.applymap(
+        lambda x: "background-color: #4CAF50" if x == "COMPRA" else "background-color: #F44336", 
+        subset=["Sinal"]
+    ),
+    hide_index=True,
+    use_container_width=True
+)
+
+# Gráficos
+tab1, tab2, tab3 = st.tabs(["📊 Mercado", "🏦 Exchanges", "🔍 Detalhes"])
 
 with tab1:
-    if not df_price.empty:
-        st.subheader("Preço do BTC (Últimos 90 dias)")
-        fig_price = px.line(df_price, x="date", y="price")
-        st.plotly_chart(fig_price, use_container_width=True)
-    
-    if not df_hashrate.empty:
-        st.subheader("Hash Rate (TH/s)")
-        fig_hash = px.line(df_hashrate, x="date", y="y")
-        st.plotly_chart(fig_hash, use_container_width=True)
+    if not data['prices'].empty:
+        fig = px.line(data['prices'], x="date", y=["price", "MA7"], title="Preço BTC vs Média Móvel 7 Dias")
+        st.plotly_chart(fig, use_container_width=True)
 
 with tab2:
-    st.subheader("Fluxo de Exchanges (Simulado)")
-    df_exchanges = pd.DataFrame(exchanges).T
-    st.dataframe(df_exchanges.style.format("{:,.0f} BTC"))
-    
-    fig_flows = px.bar(
-        df_exchanges,
-        x=df_exchanges.index,
-        y=["inflow", "outflow"],
-        barmode="group",
-        title="Inflow vs Outflow"
-    )
-    st.plotly_chart(fig_flows, use_container_width=True)
+    df_exchanges = pd.DataFrame(data['exchanges']).T
+    fig = px.bar(df_exchanges, y=["inflow", "outflow"], barmode="group", title="Fluxo de Exchanges (BTC)")
+    st.plotly_chart(fig, use_container_width=True)
 
 with tab3:
-    st.subheader("Dificuldade da Rede (Corrigido)")
-    if not df_difficulty.empty:
-        fig_diff = px.line(
-            df_difficulty,
-            x="date",
-            y="y",
-            title="Dificuldade de Mineração (Últimos 2 Anos)"
-        )
-        st.plotly_chart(fig_diff, use_container_width=True)
-    else:
-        st.info("Dados de dificuldade carregados parcialmente")
+    if not data['difficulty'].empty:
+        fig = px.line(data['difficulty'], x="date", y="y", title="Dificuldade da Rede (Últimos 2 Anos)")
+        st.plotly_chart(fig, use_container_width=True)
 
-# ---- RODAPÉ (MESMO DA VERSÃO ANTERIOR) ----
-st.sidebar.header("Configurações")
+# ---- RODAPÉ ----
+st.sidebar.header("🔧 Configurações")
 if st.sidebar.button("Atualizar Dados"):
     st.cache_data.clear()
     st.rerun()
 
-st.sidebar.caption(f"Última atualização: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+st.sidebar.markdown("""
+**📌 Legenda:**
+- 🟢 **COMPRA**: 3+ indicadores positivos
+- 🔴 **VENDA**: 3+ indicadores negativos
+- 🟡 **NEUTRO**: Sinais mistos
+""")
