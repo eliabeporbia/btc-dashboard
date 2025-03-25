@@ -261,19 +261,54 @@ traditional_assets = get_traditional_assets()
 # Sidebar - Controles do Usuário
 st.sidebar.header("⚙️ Painel de Controle")
 
+# Inicializar session_state para configurações
+if 'user_settings' not in st.session_state:
+    st.session_state.user_settings = {
+        'rsi_window': 14,
+        'bb_window': 20,
+        'ma_windows': [7, 30, 200],
+        'email': ''
+    }
+
 # Configurações dos indicadores
 st.sidebar.subheader("🔧 Parâmetros Técnicos")
-rsi_window = st.sidebar.slider("Período do RSI", 7, 21, 14)
-bb_window = st.sidebar.slider("Janela das Bandas de Bollinger", 10, 50, 20)
+
+# Usar valores do session_state como padrão
+rsi_window = st.sidebar.slider(
+    "Período do RSI", 
+    7, 21, 
+    st.session_state.user_settings['rsi_window']
+)
+
+bb_window = st.sidebar.slider(
+    "Janela das Bandas de Bollinger", 
+    10, 50, 
+    st.session_state.user_settings['bb_window']
+)
+
 ma_windows = st.sidebar.multiselect(
     "Médias Móveis para Exibir",
     [7, 20, 30, 50, 100, 200],
-    default=[7, 30, 200]
+    st.session_state.user_settings['ma_windows']
 )
 
 # Configurações de alertas
 st.sidebar.subheader("🔔 Alertas Automáticos")
-email = st.sidebar.text_input("E-mail para notificações")
+email = st.sidebar.text_input(
+    "E-mail para notificações", 
+    st.session_state.user_settings['email']
+)
+
+# Botão para salvar configurações
+if st.sidebar.button("💾 Salvar Configurações"):
+    st.session_state.user_settings = {
+        'rsi_window': rsi_window,
+        'bb_window': bb_window,
+        'ma_windows': ma_windows,
+        'email': email
+    }
+    st.sidebar.success("Configurações salvas com sucesso!")
+
 if st.sidebar.button("Ativar Monitoramento Contínuo"):
     st.sidebar.success("Alertas ativados!")
 
