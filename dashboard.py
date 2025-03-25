@@ -65,6 +65,27 @@ def calculate_bollinger_bands(series, window=20, num_std=2):
     lower = sma - (std * num_std)
     return upper, lower
 
+def calculate_obv(price_series, volume_series):
+    """Calcula o On-Balance Volume"""
+    obv = [0]
+    for i in range(1, len(price_series)):
+        if price_series[i] > price_series[i-1]:
+            obv.append(obv[-1] + volume_series[i])
+        elif price_series[i] < price_series[i-1]:
+            obv.append(obv[-1] - volume_series[i])
+        else:
+            obv.append(obv[-1])
+    return pd.Series(obv, index=price_series.index)
+
+def calculate_stochastic(price_series, k_window=14, d_window=3):
+    """Calcula o Stochastic Oscillator"""
+    low_min = price_series.rolling(window=k_window).min()
+    high_max = price_series.rolling(window=k_window).max()
+    stoch = 100 * (price_series - low_min) / (high_max - low_min)
+    stoch_k = stoch.rolling(window=d_window).mean()
+    stoch_d = stoch_k.rolling(window=d_window).mean()
+    return stoch_k, stoch_d
+
 def simulate_event(event, price_series):
     """Simula impacto de eventos no preço com tratamento robusto"""
     if not isinstance(price_series, pd.Series):
@@ -115,6 +136,7 @@ def get_market_sentiment():
 def get_traditional_assets():
     """Coleta dados de ativos tradicionais com tratamento de erro"""
     assets = {
+        "BTC-USD": "BTC-USD",
         "S&P 500": "^GSPC",
         "Ouro": "GC=F",
         "ETH-USD": "ETH-USD"
@@ -230,6 +252,54 @@ def backtest_ema_cross_strategy(df, short_window=9, long_window=21):
     df = calculate_daily_returns(df)
     return calculate_strategy_returns(df)
 
+def backtest_volume_strategy(df, volume_window=20, threshold=1.5):
+    """Estratégia baseada em volume"""
+    if df.empty or 'price' not in df.columns or 'volume' not in df.columns:
+        return pd.DataFrame()
+    
+    df = df.copy()
+    df['Volume_MA'] = df['volume'].rolling(volume_window).mean()
+    df['Volume_Ratio'] = df['volume'] / df['Volume_MA']
+    
+    df['signal'] = 0
+    df.loc[(df['Volume_Ratio'] > threshold) & (df['price'].diff() > 0), 'signal'] = 1
+    df.loc[(df['Volume_Ratio'] > threshold) & (df['price'].diff() < 0), 'signal'] = -1
+    
+    df = calculate_daily_returns(df)
+    return calculate_strategy_returns(df)
+
+def backtest_obv_strategy(df, obv_window=20, price_window=30):
+    """Estratégia baseada em OBV"""
+    if df.empty or 'price' not in df.columns or 'volume' not in df.columns:
+        return pd.DataFrame()
+    
+    df = df.copy()
+    df['OBV'] = calculate_obv(df['price'], df['volume'])
+    df['OBV_MA'] = df['OBV'].rolling(obv_window).mean()
+    df['Price_MA'] = df['price'].rolling(price_window).mean()
+    
+    df['signal'] = 0
+    df.loc[(df['OBV'] > df['OBV_MA']) & (df['price'] > df['Price_MA']), 'signal'] = 1
+    df.loc[(df['OBV'] < df['OBV_MA']) & (df['price'] < df['Price_MA']), 'signal'] = -1
+    
+    df = calculate_daily_returns(df)
+    return calculate_strategy_returns(df)
+
+def backtest_stochastic_strategy(df, k_window=14, d_window=3, overbought=80, oversold=20):
+    """Estratégia baseada em Stochastic"""
+    if df.empty or 'price' not in df.columns:
+        return pd.DataFrame()
+    
+    df = df.copy()
+    df['Stoch_K'], df['Stoch_D'] = calculate_stochastic(df['price'], k_window, d_window)
+    
+    df['signal'] = 0
+    df.loc[(df['Stoch_K'] < oversold) & (df['Stoch_D'] < oversold), 'signal'] = 1
+    df.loc[(df['Stoch_K'] > overbought) & (df['Stoch_D'] > overbought), 'signal'] = -1
+    
+    df = calculate_daily_returns(df)
+    return calculate_strategy_returns(df)
+
 def calculate_metrics(df):
     """Calcula métricas de performance com tratamento robusto"""
     metrics = {}
@@ -296,6 +366,12 @@ def optimize_strategy_parameters(data, strategy_name, param_space):
                 df = backtest_bollinger_strategy(data['prices'], **params)
             elif strategy_name == 'EMA Cross':
                 df = backtest_ema_cross_strategy(data['prices'], **params)
+            elif strategy_name == 'Volume':
+                df = backtest_volume_strategy(data['prices'], **params)
+            elif strategy_name == 'OBV':
+                df = backtest_obv_strategy(data['prices'], **params)
+            elif strategy_name == 'Stochastic':
+                df = backtest_stochastic_strategy(data['prices'], **params)
             else:
                 continue
                 
@@ -340,8 +416,12 @@ def load_data():
         data['prices'] = pd.DataFrame(market_data["prices"], columns=["timestamp", "price"])
         data['prices']["date"] = pd.to_datetime(data['prices']["timestamp"], unit="ms")
         
+        # Volume (simulado para exemplo)
+        data['prices']['volume'] = np.random.randint(10000, 50000, size=len(data['prices']))
+        
         # Calculando indicadores técnicos com tratamento de erro
         price_series = data['prices']['price']
+        volume_series = data['prices']['volume']
         
         if not price_series.empty:
             data['prices']['MA7'] = price_series.rolling(7).mean()
@@ -356,6 +436,9 @@ def load_data():
             upper, lower = calculate_bollinger_bands(price_series)
             data['prices']['BB_Upper_20'] = upper
             data['prices']['BB_Lower_20'] = lower
+            
+            data['prices']['OBV'] = calculate_obv(price_series, volume_series)
+            data['prices']['Stoch_K'], data['prices']['Stoch_D'] = calculate_stochastic(price_series)
         
         # Hashrate (taxa de hash)
         try:
@@ -468,6 +551,28 @@ def generate_signals(data, rsi_window=14, bb_window=20):
             bb_lower = data['prices'][bb_lower_col].iloc[-1]
             bb_signal = "COMPRA" if last_price < bb_lower else "VENDA" if last_price > bb_upper else "NEUTRO"
             signals.append((f"Bollinger Bands ({bb_window})", bb_signal, f"Atual: ${last_price:,.0f}"))
+        
+        # 5. Volume
+        if 'volume' in data['prices'].columns:
+            volume_ma = data['prices']['volume'].rolling(20).mean().iloc[-1]
+            last_volume = data['prices']['volume'].iloc[-1]
+            volume_ratio = last_volume / volume_ma
+            volume_signal = "COMPRA" if volume_ratio > 1.5 and last_price > data['prices']['price'].iloc[-2] else "VENDA" if volume_ratio > 1.5 and last_price < data['prices']['price'].iloc[-2] else "NEUTRO"
+            signals.append(("Volume (20MA)", volume_signal, f"{volume_ratio:.1f}x"))
+        
+        # 6. OBV
+        if 'OBV' in data['prices'].columns:
+            obv_ma = data['prices']['OBV'].rolling(20).mean().iloc[-1]
+            last_obv = data['prices']['OBV'].iloc[-1]
+            obv_signal = "COMPRA" if last_obv > obv_ma and last_price > data['prices']['price'].iloc[-2] else "VENDA" if last_obv < obv_ma and last_price < data['prices']['price'].iloc[-2] else "NEUTRO"
+            signals.append(("OBV (20MA)", obv_signal, f"{last_obv/1e6:.1f}M"))
+        
+        # 7. Stochastic
+        if 'Stoch_K' in data['prices'].columns and 'Stoch_D' in data['prices'].columns:
+            stoch_k = data['prices']['Stoch_K'].iloc[-1]
+            stoch_d = data['prices']['Stoch_D'].iloc[-1]
+            stoch_signal = "COMPRA" if stoch_k < 20 and stoch_d < 20 else "VENDA" if stoch_k > 80 and stoch_d > 80 else "NEUTRO"
+            signals.append(("Stochastic (14,3)", stoch_signal, f"K:{stoch_k:.1f}, D:{stoch_d:.1f}"))
     
     except Exception as e:
         st.error(f"Erro ao gerar sinais: {str(e)}")
@@ -665,6 +770,21 @@ with tab1:  # Mercado
                 if bb_signal:
                     bb_color = "🟢" if bb_signal[1] == "COMPRA" else "🔴" if bb_signal[1] == "VENDA" else "🟡"
                     st.markdown(f"{bb_color} **{bb_signal[0]}**: {bb_signal[1]} ({bb_signal[2]})")
+                
+                volume_signal = next((s for s in signals if "Volume" in s[0]), None)
+                if volume_signal:
+                    vol_color = "🟢" if volume_signal[1] == "COMPRA" else "🔴" if volume_signal[1] == "VENDA" else "🟡"
+                    st.markdown(f"{vol_color} **{volume_signal[0]}**: {volume_signal[1]} ({volume_signal[2]})")
+                
+                obv_signal = next((s for s in signals if "OBV" in s[0]), None)
+                if obv_signal:
+                    obv_color = "🟢" if obv_signal[1] == "COMPRA" else "🔴" if obv_signal[1] == "VENDA" else "🟡"
+                    st.markdown(f"{obv_color} **{obv_signal[0]}**: {obv_signal[1]} ({obv_signal[2]})")
+                
+                stoch_signal = next((s for s in signals if "Stochastic" in s[0]), None)
+                if stoch_signal:
+                    stoch_color = "🟢" if stoch_signal[1] == "COMPRA" else "🔴" if stoch_signal[1] == "VENDA" else "🟡"
+                    st.markdown(f"{stoch_color} **{stoch_signal[0]}**: {stoch_signal[1]} ({stoch_signal[2]})")
         
         st.divider()
         st.subheader("📌 Análise Consolidada")
@@ -699,12 +819,19 @@ with tab1:  # Mercado
 with tab2:  # Comparativos
     st.subheader("📌 BTC vs Ativos Tradicionais")
     if not traditional_assets.empty:
+        # Normalizar os dados para começar em 100
+        normalized = traditional_assets.copy()
+        for asset in normalized['asset'].unique():
+            mask = normalized['asset'] == asset
+            first_value = normalized.loc[mask, 'value'].iloc[0]
+            normalized.loc[mask, 'value'] = (normalized.loc[mask, 'value'] / first_value) * 100
+        
         fig_comp = px.line(
-            traditional_assets, 
+            normalized, 
             x="date", y="value", 
             color="asset",
-            title="Desempenho Comparativo (Últimos 90 dias)",
-            log_y=True
+            title="Desempenho Comparativo (Últimos 90 dias) - Base 100",
+            log_y=False
         )
         st.plotly_chart(fig_comp, use_container_width=True)
     else:
@@ -720,7 +847,7 @@ with tab3:  # Backtesting (REVISADO E APRIMORADO)
     # Seletor de estratégia
     strategy = st.selectbox(
         "Escolha sua Estratégia:",
-        ["RSI", "MACD", "Bollinger", "EMA Cross"],
+        ["RSI", "MACD", "Bollinger", "EMA Cross", "Volume", "OBV", "Stochastic"],
         key="backtest_strategy"
     )
     
@@ -751,10 +878,27 @@ with tab3:  # Backtesting (REVISADO E APRIMORADO)
                 num_std = st.slider("Nº de Desvios", 1.0, 3.0, 2.0, 0.1)
                 df = backtest_bollinger_strategy(data['prices'], window, num_std)
                 
-            else:  # EMA Cross
+            elif strategy == "EMA Cross":
                 short_window = st.slider("EMA Curta", 5, 20, 9)
                 long_window = st.slider("EMA Longa", 20, 50, 21)
                 df = backtest_ema_cross_strategy(data['prices'], short_window, long_window)
+                
+            elif strategy == "Volume":
+                volume_window = st.slider("Janela Volume", 10, 50, 20)
+                threshold = st.slider("Limiar Volume", 1.0, 3.0, 1.5, 0.1)
+                df = backtest_volume_strategy(data['prices'], volume_window, threshold)
+                
+            elif strategy == "OBV":
+                obv_window = st.slider("Janela OBV", 10, 50, 20)
+                price_window = st.slider("Janela Preço", 10, 50, 30)
+                df = backtest_obv_strategy(data['prices'], obv_window, price_window)
+                
+            elif strategy == "Stochastic":
+                k_window = st.slider("Período %K", 5, 21, 14)
+                d_window = st.slider("Período %D", 3, 9, 3)
+                overbought = st.slider("Sobrecompra", 70, 90, 80)
+                oversold = st.slider("Sobrevenda", 10, 30, 20)
+                df = backtest_stochastic_strategy(data['prices'], k_window, d_window, overbought, oversold)
                 
         except Exception as e:
             st.error(f"Erro ao configurar estratégia: {str(e)}")
@@ -778,10 +922,25 @@ with tab3:  # Backtesting (REVISADO E APRIMORADO)
             - **Venda Parcial**: Preço cruza a média móvel
             - **Venda Total**: Preço toca banda superior
             """)
-        else:  # EMA Cross
+        elif strategy == "EMA Cross":
             st.markdown("""
             - **Compra**: EMA curta cruza EMA longa para cima
             - **Venda**: EMA curta cruza EMA longa para baixo
+            """)
+        elif strategy == "Volume":
+            st.markdown("""
+            - **Compra**: Volume > Média + Limiar e preço subindo
+            - **Venda**: Volume > Média + Limiar e preço caindo
+            """)
+        elif strategy == "OBV":
+            st.markdown("""
+            - **Compra**: OBV > Média e preço subindo
+            - **Venda**: OBV < Média e preço caindo
+            """)
+        elif strategy == "Stochastic":
+            st.markdown("""
+            - **Compra**: %K e %D abaixo da zona de sobrevenda
+            - **Venda**: %K e %D acima da zona de sobrecompra
             """)
     
     if df.empty:
@@ -860,10 +1019,27 @@ with tab3:  # Backtesting (REVISADO E APRIMORADO)
                     'window': range(15, 26),
                     'num_std': [1.5, 2.0, 2.5]
                 }
-            else:  # EMA Cross
+            elif strategy == "EMA Cross":
                 param_space = {
                     'short_window': range(5, 16),
                     'long_window': range(15, 26)
+                }
+            elif strategy == "Volume":
+                param_space = {
+                    'volume_window': range(15, 26),
+                    'threshold': [1.2, 1.5, 1.8, 2.0]
+                }
+            elif strategy == "OBV":
+                param_space = {
+                    'obv_window': range(15, 26),
+                    'price_window': range(20, 41, 5)
+                }
+            elif strategy == "Stochastic":
+                param_space = {
+                    'k_window': range(10, 21),
+                    'd_window': range(3, 7),
+                    'overbought': range(75, 86, 5),
+                    'oversold': range(15, 26, 5)
                 }
             
             best_params, best_sharpe, best_df = optimize_strategy_parameters(
@@ -979,6 +1155,48 @@ with tab5:  # Técnico
             st.plotly_chart(fig_macd, use_container_width=True)
         else:
             st.warning("Não foi possível calcular o MACD")
+        
+        # Gráfico Volume
+        if 'volume' in data['prices'].columns:
+            fig_vol = px.bar(data['prices'], x="date", y="volume", 
+                           title="Volume de Negociação")
+            fig_vol.add_trace(go.Scatter(
+                x=data['prices']['date'],
+                y=data['prices']['volume'].rolling(20).mean(),
+                name="Média 20 dias",
+                line=dict(color='red')
+            ))
+            st.plotly_chart(fig_vol, use_container_width=True)
+        
+        # Gráfico OBV
+        if 'OBV' in data['prices'].columns:
+            fig_obv = px.line(data['prices'], x="date", y="OBV", 
+                            title="On-Balance Volume (OBV)")
+            fig_obv.add_trace(go.Scatter(
+                x=data['prices']['date'],
+                y=data['prices']['OBV'].rolling(20).mean(),
+                name="Média 20 dias",
+                line=dict(color='red')
+            ))
+            st.plotly_chart(fig_obv, use_container_width=True)
+        
+        # Gráfico Stochastic
+        if 'Stoch_K' in data['prices'].columns and 'Stoch_D' in data['prices'].columns:
+            fig_stoch = go.Figure()
+            fig_stoch.add_trace(go.Scatter(
+                x=data['prices']['date'],
+                y=data['prices']['Stoch_K'],
+                name="%K"
+            ))
+            fig_stoch.add_trace(go.Scatter(
+                x=data['prices']['date'],
+                y=data['prices']['Stoch_D'],
+                name="%D"
+            ))
+            fig_stoch.add_hline(y=80, line_dash="dash", line_color="red")
+            fig_stoch.add_hline(y=20, line_dash="dash", line_color="green")
+            fig_stoch.update_layout(title="Stochastic Oscillator (14,3)")
+            st.plotly_chart(fig_stoch, use_container_width=True)
 
 with tab6:  # Exportar
     st.subheader("📤 Exportar Dados Completo")
@@ -997,6 +1215,11 @@ with tab6:  # Exportar
         pdf.cell(200, 10, txt=f"- Período RSI: {st.session_state.user_settings['rsi_window']}", ln=1)
         pdf.cell(200, 10, txt=f"- BB Window: {st.session_state.user_settings['bb_window']}", ln=1)
         pdf.cell(200, 10, txt=f"- Médias Móveis: {', '.join(map(str, st.session_state.user_settings['ma_windows']))}", ln=1)
+        
+        # Sinais técnicos
+        pdf.cell(200, 10, txt="Sinais Técnicos:", ln=1)
+        for signal in signals:
+            pdf.cell(200, 10, txt=f"- {signal[0]}: {signal[1]} ({signal[2]})", ln=1)
         
         # Salvar temporariamente
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -1028,9 +1251,12 @@ st.sidebar.markdown("""
 2. RSI (sobrecompra/sobrevenda)
 3. MACD (momentum)
 4. Bandas de Bollinger
-5. Fluxo de Exchanges
-6. Hashrate vs Dificuldade
-7. Atividade de Whales
-8. Análise Sentimental
-9. Comparação com Mercado Tradicional
+5. Volume (confirmação)
+6. OBV (fluxo de capital)
+7. Stochastic (sobrecompra/sobrevenda)
+8. Fluxo de Exchanges
+9. Hashrate vs Dificuldade
+10. Atividade de Whales
+11. Análise Sentimental
+12. Comparação com Mercado Tradicional
 """)
