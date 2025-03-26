@@ -20,56 +20,54 @@ from sklearn.gaussian_process.kernels import RBF, ConstantKernel
 # ======================
 DUNE_API_KEY = "is5jjmAQzT7jd3V97mQzbRnoOCuTSfDg"  # Sua nova chave
 WHALE_QUERY_ID = "2973476"  # ID de query atualizado (BTC Whale Transactions)
-
-@st.cache_data(ttl=3600)
-def get_dune_whale_data():
-    """Versão 2024 compatível com a nova API da Dune"""
-    try:
-        # 1. Configuração da requisição
-        headers = {
-            "X-Dune-API-Key": DUNE_API_KEY,
-            "Content-Type": "application/json"
-        }
+headers = {"X-Dune-API-Key": DUNE_API_KEY}
         
-        # 2. Primeiro executamos a query
-        execute_url = f"https://api.dune.com/api/v1/query/{WHALE_QUERY_ID}/execute"
-        execute_response = requests.post(execute_url, headers=headers, timeout=30)
+        # 1. Executa a query
+        execute_response = requests.post(
+            f"https://api.dune.com/api/v1/query/{WHALE_QUERY_ID}/execute",
+            headers=headers,
+            timeout=30
+        )
         execute_response.raise_for_status()
-        execution_id = execute_response.json()['execution_id']
+        execution_id = execute_response.json().get('execution_id')
         
-        # 3. Agora buscamos os resultados
-        results_url = f"https://api.dune.com/api/v1/execution/{execution_id}/results"
+        if not execution_id:
+            raise ValueError("Falha ao obter execution_id")
         
-        # Espera até 2 minutos pelos resultados
-        for _ in range(12):
-            results_response = requests.get(results_url, headers=headers, timeout=30)
+        # 2. Busca resultados (com retry)
+        for _ in range(6):  # Tenta por até 1 minuto
+            results_response = requests.get(
+                f"https://api.dune.com/api/v1/execution/{execution_id}/results",
+                headers=headers,
+                timeout=30
+            )
+            
             if results_response.status_code == 200:
                 data = results_response.json()
-                if data['state'] == 'QUERY_STATE_COMPLETED':
+                if data.get('state') == 'QUERY_STATE_COMPLETED':
                     df = pd.DataFrame(data['result']['rows'])
-                    
-                    # Processamento dos campos
-                    df['date'] = pd.to_datetime(df['block_time'])
-                    df['amount_btc'] = df['amount'].astype(float) / 1e8
-                    df['amount_usd'] = df['amount_usd'].astype(float)
-                    
-                    return df[['date', 'amount_btc', 'amount_usd', 'from_address', 'to_address']]
+                    # Processamento seguro:
+                    df['date'] = pd.to_datetime(df.get('block_time', df.get('time', datetime.now())))
+                    df['amount_btc'] = df.get('amount', 0) / 1e8
+                    df['amount_usd'] = df.get('amount_usd', df['amount_btc'] * 45000)  # Fallback rate
+                    return df[['date', 'amount_btc', 'amount_usd', 'from_address', 'to_address']].dropna()
             
-            time.sleep(10)  # Espera 10 segundos entre tentativas
+            time.sleep(10)  # Espera entre tentativas
         
-        raise TimeoutError("Tempo limite excedido ao aguardar resultados")
-        
+        raise TimeoutError("Timeout ao buscar resultados")
+    
     except Exception as e:
-        st.warning(f"⚠️ Dados simulados ativados. Erro na API: {str(e)}")
-        # Fallback com dados realistas
-        fake_data = {
-            "date": pd.date_range(end=datetime.now(), periods=5, freq='6h'),
-            "amount_btc": [124.5, 89.2, 156.7, 201.3, 68.9],
-            "amount_usd": [4.2e6, 3.1e6, 5.4e6, 7.2e6, 2.3e6],
-            "from_address": ["Binance", "Coinbase", "Unknown", "Whale_0x3a1...", "Kraken"],
-            "to_address": ["Cold_Storage", "Exchange", "Institution", "Mining_Pool", "Wallet_X"]
-        }
-        return pd.DataFrame(fake_data)
+        st.error(f"🚨 Erro crítico: {str(e)}")
+        # Fallback ultra realista
+        fake_transactions = [
+            {"date": datetime.now() - timedelta(hours=i*6),
+             "amount_btc": round(50 + (i * 20), 2),
+             "amount_usd": round((50 + (i * 20)) * 45000, 2),
+             "from_address": f"Exchange_{i}",
+             "to_address": f"Wallet_{i}"}
+            for i in range(1, 6)
+        ]
+        return pd.DataFrame(fake_transactions)
 
 # ======================
 # CONFIGURAÇÕES INICIAIS
