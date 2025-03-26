@@ -155,7 +155,7 @@ def get_dune_whale_data():
     except Exception as e:
         st.warning(f"⚠️ Falha na API. Dados simulados serão usados. Erro: {str(e)}")
         return pd.DataFrame({
-            "date": pd.date_range(end=datetime.now(), periods=5, freq='12H'),
+            "date": pd.date_range(end=datetime.now(), periods=5, freq='12h'),
             "amount_btc": np.random.randint(10, 100, 5),
             "amount_usd": np.random.randint(1e6, 5e6, 5),
             "from_address": ["Exchange A", "Wallet X", "Unknown", "Institution", "Exchange B"],
