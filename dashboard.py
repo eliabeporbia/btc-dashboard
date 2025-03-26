@@ -14,11 +14,13 @@ from itertools import product
 import re
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel
+
 # ======================
 # CONFIGURAÇÕES DUNE ANALYTICS
 # ======================
 DUNE_API_KEY = "XqnEsXGgvej0UDF5YaVSlVKZdrkgv7dC"  # Sua chave já está aqui
 WHALE_QUERY_ID = "2105432"  # ID da query pública de whales
+
 # ======================
 # CONFIGURAÇÕES INICIAIS
 # ======================
@@ -98,7 +100,6 @@ def calculate_gaussian_process(price_series, window=30, lookahead=5):
     if len(price_series) < window + lookahead:
         return pd.Series(np.nan, index=price_series.index)
         
-    
     kernel = ConstantKernel(1.0) * RBF(length_scale=1.0)
     gpr = GaussianProcessRegressor(kernel=kernel, alpha=0.1)
     
@@ -119,7 +120,8 @@ def calculate_gaussian_process(price_series, window=30, lookahead=5):
     predictions = [np.nan] * (window + lookahead - 1) + predictions
     
     return pd.Series(predictions[:len(price_series)], index=price_series.index)
-    # ======================  👇 ADICIONE AQUI!
+
+# ======================
 # FUNÇÃO DE BUSCA DE DADOS DE WHALES (NOVA)
 # ======================
 @st.cache_data(ttl=3600)
@@ -159,7 +161,6 @@ def get_dune_whale_data():
             "from_address": ["Exchange A", "Wallet X", "Unknown", "Institution", "Exchange B"],
             "to_address": ["Wallet Y", "Exchange C", "Institution", "Wallet Z", "Unknown"]
         })
-
 
 def get_exchange_flows():
     """Retorna dados simulados de fluxo de exchanges"""
@@ -246,7 +247,7 @@ def plot_whale_activity(data):
     ))
     
     fig.update_layout(
-        title="🐋 Atividade de s (Dune Analytics)",
+        title="🐋 Atividade de Whales (Dune Analytics)",
         yaxis_title="BTC",
         yaxis2=dict(title="USD $M", overlaying="y", side="right"),
         hovermode="x unified"
@@ -643,7 +644,6 @@ def load_data():
             'amount_btc': 'amount',
             'from_address': 'exchange'
         })[['date', 'amount', 'exchange']]
-        })
         
     except requests.exceptions.RequestException as e:
         st.error(f"Erro na requisição à API: {str(e)}")
