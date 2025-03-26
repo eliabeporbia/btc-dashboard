@@ -33,15 +33,6 @@ st_autorefresh(interval=refresh_interval * 1000, limit=None, key="auto_refresh")
 st.title("🚀 BTC Super Dashboard Pro+ - Tempo Real")
 
 # ======================
-# CONFIGURAÇÕES DUNE ANALYTICS
-# ======================
-DUNE_API_KEY = "is5jjmAQzT7jd3V97mQzbRnoOCuTSfDg"
-WHALE_QUERY_ID = "2973476"
-headers = {"X-Dune-API-Key": DUNE_API_KEY}
-
-# [...] Restante do seu código original continua a partir daqui
-
-# ======================
 # WEBSOCKET PARA DADOS EM TEMPO REAL
 # ======================
 
@@ -199,60 +190,6 @@ def calculate_gaussian_process(price_series, window=30, lookahead=5):
     
     return pd.Series(predictions[:len(price_series)], index=price_series.index)
 
-# ======================
-# FUNÇÃO DE BUSCA DE DADOS DE WHALES (NOVA)
-# ======================
-@st.cache_data(ttl=300)
-def get_dune_whale_data():
-    """Busca dados de whales do Dune Analytics com tratamento de erro robusto"""
-    try:
-        # 1. Executa a query
-        execute_response = requests.post(
-            f"https://api.dune.com/api/v1/query/{WHALE_QUERY_ID}/execute",
-            headers=headers,
-            timeout=30
-        )
-        execute_response.raise_for_status()
-        execution_id = execute_response.json().get('execution_id')
-        
-        if not execution_id:
-            raise ValueError("Falha ao obter execution_id")
-        
-        # 2. Busca resultados (com retry)
-        for _ in range(6):  # Tenta por até 1 minuto
-            results_response = requests.get(
-                f"https://api.dune.com/api/v1/execution/{execution_id}/results",
-                headers=headers,
-                timeout=30
-            )
-            
-            if results_response.status_code == 200:
-                data = results_response.json()
-                if data.get('state') == 'QUERY_STATE_COMPLETED':
-                    df = pd.DataFrame(data['result']['rows'])
-                    # Processamento seguro:
-                    df['date'] = pd.to_datetime(df.get('block_time', df.get('time', datetime.now())))
-                    df['amount_btc'] = df.get('amount', 0) / 1e8
-                    df['amount_usd'] = df.get('amount_usd', df['amount_btc'] * 45000)  # Fallback rate
-                    return df[['date', 'amount_btc', 'amount_usd', 'from_address', 'to_address']].dropna()
-            
-            time.sleep(10)  # Espera entre tentativas
-        
-        raise TimeoutError("Timeout ao buscar resultados")
-    
-    except Exception as e:
-        st.error(f"🚨 Erro crítico: {str(e)}")
-        # Fallback ultra realista
-        fake_transactions = [
-            {"date": datetime.now() - timedelta(hours=i*6),
-             "amount_btc": round(50 + (i * 20), 2),
-             "amount_usd": round((50 + (i * 20)) * 45000, 2),
-             "from_address": f"Exchange_{i}",
-             "to_address": f"Wallet_{i}"}
-            for i in range(1, 6)
-        ]
-        return pd.DataFrame(fake_transactions)
-
 def get_exchange_flows():
     """Retorna dados simulados de fluxo de exchanges"""
     exchanges = ["Binance", "Coinbase", "Kraken", "FTX", "Bitfinex"]
@@ -301,46 +238,6 @@ def plot_hashrate_difficulty(data):
             side="right",
             color='red'
         ),
-        hovermode="x unified"
-    )
-    return fig
-
-def plot_whale_activity(data):
-    """Mostra atividade REAL de whales com dados do Dune Analytics"""
-    if 'whale_data' not in data or data['whale_data'].empty:
-        return None
-    
-    # Agrupar por dia para melhor visualização
-    whale_daily = data['whale_data'].groupby(pd.Grouper(key='date', freq='D')).agg({
-        'amount_btc': 'sum',
-        'amount_usd': 'sum'
-    }).reset_index()
-    
-    fig = go.Figure()
-    
-    # Gráfico de barras
-    fig.add_trace(go.Bar(
-        x=whale_daily['date'],
-        y=whale_daily['amount_btc'],
-        name="BTC Movimentado",
-        marker_color='orange',
-        text=[f"${val/1e6:.1f}M" for val in whale_daily['amount_usd']],
-        hoverinfo='x+y+text'
-    ))
-    
-    # Linha de valor em USD
-    fig.add_trace(go.Scatter(
-        x=whale_daily['date'],
-        y=whale_daily['amount_usd']/1e6,
-        name="Valor (USD $M)",
-        yaxis="y2",
-        line=dict(color='blue')
-    ))
-    
-    fig.update_layout(
-        title="🐋 Atividade de Whales (Dune Analytics)",
-        yaxis_title="BTC",
-        yaxis2=dict(title="USD $M", overlaying="y", side="right"),
         hovermode="x unified"
     )
     return fig
@@ -739,12 +636,6 @@ def load_data():
             "kraken": {"inflow": 600, "outflow": 550, "reserves": 200000}
         }
         
-        data['whale_data'] = get_dune_whale_data()
-        data['whale_alert'] = data['whale_data'].rename(columns={
-            'amount_btc': 'amount',
-            'from_address': 'exchange'
-        })[['date', 'amount', 'exchange']]
-        
     except requests.exceptions.RequestException as e:
         st.error(f"Erro na requisição à API: {str(e)}")
         data['prices'] = pd.DataFrame()
@@ -1005,10 +896,6 @@ with tab1:
                 st.plotly_chart(hr_diff_fig, use_container_width=True)
             else:
                 st.warning("Dados de hashrate/dificuldade não disponíveis")
-            
-            whale_fig = plot_whale_activity(data)
-            if whale_fig:
-                st.plotly_chart(whale_fig, use_container_width=True)
         else:
             st.warning("Dados de preços não disponíveis")
     
@@ -1576,9 +1463,8 @@ st.sidebar.markdown("""
 8. Regressão de Processo Gaussiano (previsão)
 9. Fluxo de Exchanges
 10. Hashrate vs Dificuldade
-11. Atividade de Whales
-12. Análise Sentimental
-13. Comparação com Mercado Tradicional
+11. Análise Sentimental
+12. Comparação com Mercado Tradicional
 """)
 
 # Rodapé com timestamp
