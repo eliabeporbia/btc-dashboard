@@ -1,3 +1,11 @@
+# ======================
+# CONFIGURAÇÕES INICIAIS
+# ======================
+
+# Configuração inicial da página - DEVE SER O PRIMEIRO COMANDO STREAMLIT
+st.set_page_config(layout="wide", page_title="BTC Super Dashboard Pro+")
+
+# Agora importe todas as bibliotecas necessárias
 import streamlit as st
 import requests
 import pandas as pd
@@ -18,13 +26,13 @@ from sklearn.gaussian_process.kernels import RBF, ConstantKernel
 from binance import ThreadedWebsocketManager
 from streamlit_autorefresh import st_autorefresh
 
-# ======================
-# CONFIGURAÇÕES INICIAIS
-# ======================
-
 # Configuração de auto-refresh
 refresh_interval = 60  # segundos
 st_autorefresh(interval=refresh_interval * 1000, limit=None, key="auto_refresh")
+
+st.title("🚀 BTC Super Dashboard Pro+ - Tempo Real")
+
+# Restante do seu código continua a partir daqui...
 
 # Configuração inicial da página
 st.set_page_config(layout="wide", page_title="BTC Super Dashboard Pro+")
