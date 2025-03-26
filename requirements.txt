@@ -1,8 +1,9 @@
-streamlit
-requests
-pandas
-plotly
-numpy
-fpdf2
-scikit-learn
-yfinance
+streamlit>=1.28.0
+requests>=2.31.0
+pandas>=2.1.0
+plotly>=5.18.0
+numpy>=1.24.0
+fpdf2>=2.7.4
+scikit-learn>=1.3.0
+yfinance>=0.2.25
+matplotlib>=3.7.0
