@@ -15,13 +15,91 @@ import re
 import time
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel
+from binance import ThreadedWebsocketManager
+from streamlit_autorefresh import st_autorefresh
 
 # ======================
-# CONFIGURAÇÕES DUNE ANALYTICS (ATUALIZADAS)
+# CONFIGURAÇÕES INICIAIS
 # ======================
-DUNE_API_KEY = "is5jjmAQzT7jd3V97mQzbRnoOCuTSfDg"  # Sua nova chave
-WHALE_QUERY_ID = "2973476"  # ID de query atualizado (BTC Whale Transactions)
+
+# Configuração de auto-refresh
+refresh_interval = 60  # segundos
+st_autorefresh(interval=refresh_interval * 1000, limit=None, key="auto_refresh")
+
+# Configuração inicial da página
+st.set_page_config(layout="wide", page_title="BTC Super Dashboard Pro+")
+st.title("🚀 BTC Super Dashboard Pro+ - Tempo Real")
+
+# ======================
+# CONFIGURAÇÕES DUNE ANALYTICS
+# ======================
+DUNE_API_KEY = "is5jjmAQzT7jd3V97mQzbRnoOCuTSfDg"
+WHALE_QUERY_ID = "2973476"
 headers = {"X-Dune-API-Key": DUNE_API_KEY}
+
+# ======================
+# WEBSOCKET PARA DADOS EM TEMPO REAL
+# ======================
+
+class RealTimeData:
+    def __init__(self):
+        self.current_price = None
+        self.price_history = []
+        self.last_update = None
+        self.twm = ThreadedWebsocketManager()
+        self.setup_websocket()
+
+    def setup_websocket(self):
+        def handle_socket_message(msg):
+            if 'p' in msg:
+                self.current_price = float(msg['p'])
+                self.price_history.append({
+                    'timestamp': datetime.now(),
+                    'price': self.current_price
+                })
+                self.last_update = datetime.now()
+                # Mantém apenas os últimos 1000 preços
+                if len(self.price_history) > 1000:
+                    self.price_history = self.price_history[-1000:]
+
+        try:
+            self.twm.start()
+            self.twm.start_symbol_ticker_socket(
+                callback=handle_socket_message, 
+                symbol='BTCUSDT'
+            )
+        except Exception as e:
+            st.error(f"Erro ao conectar WebSocket: {str(e)}")
+            self.fallback_to_api()
+
+    def fallback_to_api(self):
+        try:
+            response = requests.get(
+                "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
+                timeout=5
+            )
+            data = response.json()
+            self.current_price = float(data['price'])
+            self.price_history.append({
+                'timestamp': datetime.now(),
+                'price': self.current_price
+            })
+            self.last_update = datetime.now()
+        except Exception as e:
+            st.error(f"Falha no fallback da API: {str(e)}")
+
+    def get_current_data(self):
+        if not self.price_history:
+            self.fallback_to_api()
+        return {
+            'current_price': self.current_price,
+            'price_history': pd.DataFrame(self.price_history),
+            'last_update': self.last_update or datetime.now()
+        }
+
+# Inicializa o objeto de dados em tempo real
+if 'realtime_data' not in st.session_state:
+    st.session_state.realtime_data = RealTimeData()
 
 # ======================
 # FUNÇÕES DE CÁLCULO (ATUALIZADAS)
@@ -120,7 +198,7 @@ def calculate_gaussian_process(price_series, window=30, lookahead=5):
 # ======================
 # FUNÇÃO DE BUSCA DE DADOS DE WHALES (NOVA)
 # ======================
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=300)
 def get_dune_whale_data():
     """Busca dados de whales do Dune Analytics com tratamento de erro robusto"""
     try:
@@ -585,17 +663,29 @@ def optimize_strategy_parameters(data, strategy_name, param_space):
 # CARREGAMENTO DE DADOS (REVISADO)
 # ======================
 
-@st.cache_data(ttl=3600, show_spinner="Carregando dados do mercado...")
+@st.cache_data(ttl=60, show_spinner="Carregando dados do mercado...")
 def load_data():
     data = {}
     try:
-        url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=90"
-        response = requests.get(url, timeout=15)
-        response.raise_for_status()
-        market_data = response.json()
+        # Dados em tempo real
+        realtime_data = st.session_state.realtime_data.get_current_data()
+        data['realtime_price'] = realtime_data['current_price']
+        data['realtime_history'] = realtime_data['price_history']
         
-        data['prices'] = pd.DataFrame(market_data["prices"], columns=["timestamp", "price"])
-        data['prices']["date"] = pd.to_datetime(data['prices']["timestamp"], unit="ms")
+        # Dados históricos (fallback se WebSocket falhar)
+        if realtime_data['price_history'].empty:
+            url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=90"
+            response = requests.get(url, timeout=15)
+            response.raise_for_status()
+            market_data = response.json()
+            
+            data['prices'] = pd.DataFrame(market_data["prices"], columns=["timestamp", "price"])
+            data['prices']["date"] = pd.to_datetime(data['prices']["timestamp"], unit="ms")
+        else:
+            data['prices'] = realtime_data['price_history'].rename(columns={
+                'timestamp': 'date',
+                'price': 'price'
+            })
         
         data['prices']['volume'] = np.random.randint(10000, 50000, size=len(data['prices']))
         
@@ -619,7 +709,6 @@ def load_data():
             data['prices']['OBV'] = calculate_obv(price_series, volume_series)
             data['prices']['Stoch_K'], data['prices']['Stoch_D'] = calculate_stochastic(price_series)
             
-            # Adicionar apenas o indicador Gaussian Process
             data['prices']['GP_Prediction'] = calculate_gaussian_process(price_series)
         
         try:
@@ -627,7 +716,6 @@ def load_data():
             hr_response.raise_for_status()
             data['hashrate'] = pd.DataFrame(hr_response.json()["values"])
             data['hashrate']["date"] = pd.to_datetime(data['hashrate']["x"], unit="s")
-            # Converter hashrate para TH/s
             data['hashrate']['y'] = data['hashrate']['y'] / 1e12
         except Exception:
             data['hashrate'] = pd.DataFrame()
@@ -637,7 +725,6 @@ def load_data():
             diff_response.raise_for_status()
             data['difficulty'] = pd.DataFrame(diff_response.json()["values"])
             data['difficulty']["date"] = pd.to_datetime(data['difficulty']["x"], unit="s")
-            # Converter dificuldade para T
             data['difficulty']['y'] = data['difficulty']['y'] / 1e12
         except Exception:
             data['difficulty'] = pd.DataFrame()
@@ -648,7 +735,7 @@ def load_data():
             "kraken": {"inflow": 600, "outflow": 550, "reserves": 200000}
         }
         
-        data['whale_data'] = get_dune_whale_data()  # Dados REAIS
+        data['whale_data'] = get_dune_whale_data()
         data['whale_alert'] = data['whale_data'].rename(columns={
             'amount_btc': 'amount',
             'from_address': 'exchange'
@@ -749,7 +836,6 @@ def generate_signals(data, rsi_window=14, bb_window=20):
             stoch_signal = "COMPRA" if stoch_k < 20 and stoch_d < 20 else "VENDA" if stoch_k > 80 and stoch_d > 80 else "NEUTRO"
             signals.append(("Stochastic (14,3)", stoch_signal, f"K:{stoch_k:.1f}, D:{stoch_d:.1f}"))
         
-        # Adicionar apenas o sinal do Gaussian Process
         if 'GP_Prediction' in data['prices'].columns and not data['prices']['GP_Prediction'].isna().all():
             gp_pred = data['prices']['GP_Prediction'].iloc[-1]
             gp_signal = "COMPRA" if gp_pred > last_price * 1.03 else "VENDA" if gp_pred < last_price * 0.97 else "NEUTRO"
@@ -779,13 +865,6 @@ def generate_signals(data, rsi_window=14, bb_window=20):
 # INTERFACE DO USUÁRIO (REVISADA)
 # ======================
 
-# Configuração inicial da página
-st.set_page_config(layout="wide", page_title="BTC Super Dashboard Pro+")
-st.title("🚀 BTC Super Dashboard Pro+ - Edição Premium")
-
-# Carregar dados
-data = load_data()
-
 # Configurações padrão
 DEFAULT_SETTINGS = {
     'rsi_window': 14,
@@ -802,43 +881,18 @@ if 'user_settings' not in st.session_state:
 # Barra lateral
 st.sidebar.header("⚙️ Painel de Controle")
 
+# Controle de atualização
+refresh_interval = st.sidebar.slider("Intervalo de Atualização (segundos)", 30, 300, 60)
+
 st.sidebar.subheader("🔧 Parâmetros Técnicos")
-
-rsi_window = st.sidebar.slider(
-    "Período do RSI", 
-    7, 21, 
-    st.session_state.user_settings['rsi_window']
-)
-
-bb_window = st.sidebar.slider(
-    "Janela das Bandas de Bollinger", 
-    10, 50, 
-    st.session_state.user_settings['bb_window']
-)
-
-ma_windows = st.sidebar.multiselect(
-    "Médias Móveis para Exibir",
-    [7, 20, 30, 50, 100, 200],
-    st.session_state.user_settings['ma_windows']
-)
-
-gp_window = st.sidebar.slider(
-    "Janela do Gaussian Process", 
-    10, 60, 
-    st.session_state.user_settings['gp_window']
-)
-
-gp_lookahead = st.sidebar.slider(
-    "Previsão do Gaussian Process (dias)", 
-    1, 10, 
-    st.session_state.user_settings['gp_lookahead']
-)
+rsi_window = st.sidebar.slider("Período do RSI", 7, 21, st.session_state.user_settings['rsi_window'])
+bb_window = st.sidebar.slider("Janela das Bandas de Bollinger", 10, 50, st.session_state.user_settings['bb_window'])
+ma_windows = st.sidebar.multiselect("Médias Móveis para Exibir", [7, 20, 30, 50, 100, 200], st.session_state.user_settings['ma_windows'])
+gp_window = st.sidebar.slider("Janela do Gaussian Process", 10, 60, st.session_state.user_settings['gp_window'])
+gp_lookahead = st.sidebar.slider("Previsão do Gaussian Process (dias)", 1, 10, st.session_state.user_settings['gp_lookahead'])
 
 st.sidebar.subheader("🔔 Alertas Automáticos")
-email = st.sidebar.text_input(
-    "E-mail para notificações", 
-    st.session_state.user_settings['email']
-)
+email = st.sidebar.text_input("E-mail para notificações", st.session_state.user_settings['email'])
 
 col1, col2 = st.sidebar.columns(2)
 with col1:
@@ -859,8 +913,15 @@ with col2:
         st.sidebar.success("Configurações resetadas para padrão!")
         st.rerun()
 
-if st.sidebar.button("Ativar Monitoramento Contínuo"):
-    st.sidebar.success("Alertas ativados!")
+if st.sidebar.button("Atualizar Agora"):
+    st.cache_data.clear()
+    st.rerun()
+
+# Carregar dados com feedback
+status_placeholder = st.empty()
+with status_placeholder:
+    with st.spinner(f"🔄 Atualizando dados... Próxima atualização em {refresh_interval} segundos"):
+        data = load_data()
 
 # Gerar sinais
 signals, final_verdict, buy_signals, sell_signals = generate_signals(
@@ -879,7 +940,9 @@ st.header("📊 Painel Integrado BTC Pro+")
 # Métricas superiores
 col1, col2, col3, col4, col5 = st.columns(5)
 
-if 'prices' in data and not data['prices'].empty:
+if 'realtime_price' in data and data['realtime_price'] is not None:
+    col1.metric("Preço BTC (Tempo Real)", f"${data['realtime_price']:,.2f}")
+elif 'prices' in data and not data['prices'].empty:
     col1.metric("Preço BTC", f"${data['prices']['price'].iloc[-1]:,.2f}")
 else:
     col1.metric("Preço BTC", "N/A")
@@ -933,14 +996,12 @@ with tab1:
                          title="Preço BTC e Médias Móveis")
             st.plotly_chart(fig, use_container_width=True)
             
-            # Novo gráfico: Hashrate vs Dificuldade
             hr_diff_fig = plot_hashrate_difficulty(data)
             if hr_diff_fig:
                 st.plotly_chart(hr_diff_fig, use_container_width=True)
             else:
                 st.warning("Dados de hashrate/dificuldade não disponíveis")
             
-            # Novo gráfico: Atividade de Whales
             whale_fig = plot_whale_activity(data)
             if whale_fig:
                 st.plotly_chart(whale_fig, use_container_width=True)
@@ -990,7 +1051,6 @@ with tab1:
                     stoch_color = "🟢" if stoch_signal[1] == "COMPRA" else "🔴" if stoch_signal[1] == "VENDA" else "🟡"
                     st.markdown(f"{stoch_color} **{stoch_signal[0]}**: {stoch_signal[1]} ({stoch_signal[2]})")
                 
-                # Mostrar apenas o sinal do Gaussian Process
                 gp_signal = next((s for s in signals if "Gaussian Process" in s[0]), None)
                 if gp_signal:
                     gp_color = "🟢" if gp_signal[1] == "COMPRA" else "🔴" if gp_signal[1] == "VENDA" else "🟡"
@@ -1427,7 +1487,6 @@ with tab5:
             fig_stoch.update_layout(title="Stochastic Oscillator (14,3)")
             st.plotly_chart(fig_stoch, use_container_width=True)
         
-        # Mostrar apenas o Gaussian Process
         if 'GP_Prediction' in data['prices'].columns and not data['prices']['GP_Prediction'].isna().all():
             fig_gp = go.Figure()
             fig_gp.add_trace(go.Scatter(
@@ -1456,9 +1515,10 @@ with tab6:
         pdf.add_page()
         pdf.set_font("Arial", size=12)
         
-        # Adicionar conteúdo com texto limpo
-        if 'prices' in data and not data['prices'].empty:
-            pdf.cell(200, 10, txt=f"Preço Atual: ${data['prices']['price'].iloc[-1]:,.2f}", ln=1)
+        if 'realtime_price' in data and data['realtime_price'] is not None:
+            pdf.cell(200, 10, txt=f"Preço Atual: ${data['realtime_price']:,.2f}", ln=1)
+        elif 'prices' in data and not data['prices'].empty:
+            pdf.cell(200, 10, txt=f"Preço BTC: ${data['prices']['price'].iloc[-1]:,.2f}", ln=1)
         
         clean_verdict = clean_text(final_verdict)
         pdf.cell(200, 10, txt=f"Sinal Atual: {clean_verdict}", ln=1)
@@ -1515,4 +1575,10 @@ st.sidebar.markdown("""
 11. Atividade de Whales
 12. Análise Sentimental
 13. Comparação com Mercado Tradicional
+""")
+
+# Rodapé com timestamp
+st.sidebar.markdown(f"""
+---
+**Última atualização:** {datetime.now().strftime('%H:%M:%S')}
 """)
