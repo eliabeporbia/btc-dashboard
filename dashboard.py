@@ -16,10 +16,60 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel
 
 # ======================
-# CONFIGURAÇÕES DUNE ANALYTICS
+# CONFIGURAÇÕES DUNE ANALYTICS (ATUALIZADAS)
 # ======================
-DUNE_API_KEY = "XqnEsXGgvej0UDF5YaVSlVKZdrkgv7dC"  # Sua chave já está aqui
-WHALE_QUERY_ID = "2105432"  # ID da query pública de whales
+DUNE_API_KEY = "is5jjmAQzT7jd3V97mQzbRnoOCuTSfDg"  # Sua nova chave
+WHALE_QUERY_ID = "2973476"  # ID de query atualizado (BTC Whale Transactions)
+
+@st.cache_data(ttl=3600)
+def get_dune_whale_data():
+    """Versão 2024 compatível com a nova API da Dune"""
+    try:
+        # 1. Configuração da requisição
+        headers = {
+            "X-Dune-API-Key": DUNE_API_KEY,
+            "Content-Type": "application/json"
+        }
+        
+        # 2. Primeiro executamos a query
+        execute_url = f"https://api.dune.com/api/v1/query/{WHALE_QUERY_ID}/execute"
+        execute_response = requests.post(execute_url, headers=headers, timeout=30)
+        execute_response.raise_for_status()
+        execution_id = execute_response.json()['execution_id']
+        
+        # 3. Agora buscamos os resultados
+        results_url = f"https://api.dune.com/api/v1/execution/{execution_id}/results"
+        
+        # Espera até 2 minutos pelos resultados
+        for _ in range(12):
+            results_response = requests.get(results_url, headers=headers, timeout=30)
+            if results_response.status_code == 200:
+                data = results_response.json()
+                if data['state'] == 'QUERY_STATE_COMPLETED':
+                    df = pd.DataFrame(data['result']['rows'])
+                    
+                    # Processamento dos campos
+                    df['date'] = pd.to_datetime(df['block_time'])
+                    df['amount_btc'] = df['amount'].astype(float) / 1e8
+                    df['amount_usd'] = df['amount_usd'].astype(float)
+                    
+                    return df[['date', 'amount_btc', 'amount_usd', 'from_address', 'to_address']]
+            
+            time.sleep(10)  # Espera 10 segundos entre tentativas
+        
+        raise TimeoutError("Tempo limite excedido ao aguardar resultados")
+        
+    except Exception as e:
+        st.warning(f"⚠️ Dados simulados ativados. Erro na API: {str(e)}")
+        # Fallback com dados realistas
+        fake_data = {
+            "date": pd.date_range(end=datetime.now(), periods=5, freq='6h'),
+            "amount_btc": [124.5, 89.2, 156.7, 201.3, 68.9],
+            "amount_usd": [4.2e6, 3.1e6, 5.4e6, 7.2e6, 2.3e6],
+            "from_address": ["Binance", "Coinbase", "Unknown", "Whale_0x3a1...", "Kraken"],
+            "to_address": ["Cold_Storage", "Exchange", "Institution", "Mining_Pool", "Wallet_X"]
+        }
+        return pd.DataFrame(fake_data)
 
 # ======================
 # CONFIGURAÇÕES INICIAIS
