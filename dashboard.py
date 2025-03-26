@@ -12,6 +12,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import ParameterGrid
 from itertools import product
 import re
+import time
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel
 
@@ -21,59 +22,6 @@ from sklearn.gaussian_process.kernels import RBF, ConstantKernel
 DUNE_API_KEY = "is5jjmAQzT7jd3V97mQzbRnoOCuTSfDg"  # Sua nova chave
 WHALE_QUERY_ID = "2973476"  # ID de query atualizado (BTC Whale Transactions)
 headers = {"X-Dune-API-Key": DUNE_API_KEY}
-        
-        # 1. Executa a query
-        execute_response = requests.post(
-            f"https://api.dune.com/api/v1/query/{WHALE_QUERY_ID}/execute",
-            headers=headers,
-            timeout=30
-        )
-        execute_response.raise_for_status()
-        execution_id = execute_response.json().get('execution_id')
-        
-        if not execution_id:
-            raise ValueError("Falha ao obter execution_id")
-        
-        # 2. Busca resultados (com retry)
-        for _ in range(6):  # Tenta por até 1 minuto
-            results_response = requests.get(
-                f"https://api.dune.com/api/v1/execution/{execution_id}/results",
-                headers=headers,
-                timeout=30
-            )
-            
-            if results_response.status_code == 200:
-                data = results_response.json()
-                if data.get('state') == 'QUERY_STATE_COMPLETED':
-                    df = pd.DataFrame(data['result']['rows'])
-                    # Processamento seguro:
-                    df['date'] = pd.to_datetime(df.get('block_time', df.get('time', datetime.now())))
-                    df['amount_btc'] = df.get('amount', 0) / 1e8
-                    df['amount_usd'] = df.get('amount_usd', df['amount_btc'] * 45000)  # Fallback rate
-                    return df[['date', 'amount_btc', 'amount_usd', 'from_address', 'to_address']].dropna()
-            
-            time.sleep(10)  # Espera entre tentativas
-        
-        raise TimeoutError("Timeout ao buscar resultados")
-    
-    except Exception as e:
-        st.error(f"🚨 Erro crítico: {str(e)}")
-        # Fallback ultra realista
-        fake_transactions = [
-            {"date": datetime.now() - timedelta(hours=i*6),
-             "amount_btc": round(50 + (i * 20), 2),
-             "amount_usd": round((50 + (i * 20)) * 45000, 2),
-             "from_address": f"Exchange_{i}",
-             "to_address": f"Wallet_{i}"}
-            for i in range(1, 6)
-        ]
-        return pd.DataFrame(fake_transactions)
-
-# ======================
-# CONFIGURAÇÕES INICIAIS
-# ======================
-st.set_page_config(layout="wide", page_title="BTC Super Dashboard Pro+")
-st.title("🚀 BTC Super Dashboard Pro+ - Edição Premium")
 
 # ======================
 # FUNÇÕES DE CÁLCULO (ATUALIZADAS)
@@ -176,40 +124,53 @@ def calculate_gaussian_process(price_series, window=30, lookahead=5):
 def get_dune_whale_data():
     """Busca dados de whales do Dune Analytics com tratamento de erro robusto"""
     try:
-        url = f"https://api.dune.com/api/v1/query/{WHALE_QUERY_ID}/results"
-        headers = {"X-Dune-API-Key": DUNE_API_KEY}
+        # 1. Executa a query
+        execute_response = requests.post(
+            f"https://api.dune.com/api/v1/query/{WHALE_QUERY_ID}/execute",
+            headers=headers,
+            timeout=30
+        )
+        execute_response.raise_for_status()
+        execution_id = execute_response.json().get('execution_id')
         
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()  # Lança erro para status 4xx/5xx
-        data = response.json()
-
-        # Verificação em profundidade da estrutura de dados
-        if not data.get('result', {}).get('rows'):
-            raise ValueError("Estrutura de dados inválida - 'rows' não encontrado")
-
-        df = pd.DataFrame(data['result']['rows'])
-
-        # Processamento seguro dos campos
-        df['date'] = df.get('time') or df.get('block_time') or pd.NaT
-        if df['date'].isna().all():
-            raise ValueError("Nenhuma coluna de data válida encontrada")
+        if not execution_id:
+            raise ValueError("Falha ao obter execution_id")
         
-        df['date'] = pd.to_datetime(df['date'])
-        df['amount_btc'] = df.get('value', df.get('amount', 0)) / 1e8
-        df['amount_usd'] = df.get('value_usd', df.get('amount_usd', 0))
-
-        return df[['date', 'amount_btc', 'amount_usd', 'from_address', 'to_address']].dropna()
-
+        # 2. Busca resultados (com retry)
+        for _ in range(6):  # Tenta por até 1 minuto
+            results_response = requests.get(
+                f"https://api.dune.com/api/v1/execution/{execution_id}/results",
+                headers=headers,
+                timeout=30
+            )
+            
+            if results_response.status_code == 200:
+                data = results_response.json()
+                if data.get('state') == 'QUERY_STATE_COMPLETED':
+                    df = pd.DataFrame(data['result']['rows'])
+                    # Processamento seguro:
+                    df['date'] = pd.to_datetime(df.get('block_time', df.get('time', datetime.now())))
+                    df['amount_btc'] = df.get('amount', 0) / 1e8
+                    df['amount_usd'] = df.get('amount_usd', df['amount_btc'] * 45000)  # Fallback rate
+                    return df[['date', 'amount_btc', 'amount_usd', 'from_address', 'to_address']].dropna()
+            
+            time.sleep(10)  # Espera entre tentativas
+        
+        raise TimeoutError("Timeout ao buscar resultados")
+    
     except Exception as e:
-        st.warning(f"⚠️ Falha na API. Dados simulados serão usados. Erro: {str(e)}")
-        return pd.DataFrame({
-            "date": pd.date_range(end=datetime.now(), periods=5, freq='12h'),
-            "amount_btc": np.random.randint(10, 100, 5),
-            "amount_usd": np.random.randint(1e6, 5e6, 5),
-            "from_address": ["Exchange A", "Wallet X", "Unknown", "Institution", "Exchange B"],
-            "to_address": ["Wallet Y", "Exchange C", "Institution", "Wallet Z", "Unknown"]
-        })
-        
+        st.error(f"🚨 Erro crítico: {str(e)}")
+        # Fallback ultra realista
+        fake_transactions = [
+            {"date": datetime.now() - timedelta(hours=i*6),
+             "amount_btc": round(50 + (i * 20), 2),
+             "amount_usd": round((50 + (i * 20)) * 45000, 2),
+             "from_address": f"Exchange_{i}",
+             "to_address": f"Wallet_{i}"}
+            for i in range(1, 6)
+        ]
+        return pd.DataFrame(fake_transactions)
+
 def get_exchange_flows():
     """Retorna dados simulados de fluxo de exchanges"""
     exchanges = ["Binance", "Coinbase", "Kraken", "FTX", "Bitfinex"]
@@ -818,8 +779,14 @@ def generate_signals(data, rsi_window=14, bb_window=20):
 # INTERFACE DO USUÁRIO (REVISADA)
 # ======================
 
+# Configuração inicial da página
+st.set_page_config(layout="wide", page_title="BTC Super Dashboard Pro+")
+st.title("🚀 BTC Super Dashboard Pro+ - Edição Premium")
+
+# Carregar dados
 data = load_data()
 
+# Configurações padrão
 DEFAULT_SETTINGS = {
     'rsi_window': 14,
     'bb_window': 20,
@@ -832,6 +799,7 @@ DEFAULT_SETTINGS = {
 if 'user_settings' not in st.session_state:
     st.session_state.user_settings = DEFAULT_SETTINGS.copy()
 
+# Barra lateral
 st.sidebar.header("⚙️ Painel de Controle")
 
 st.sidebar.subheader("🔧 Parâmetros Técnicos")
@@ -894,17 +862,21 @@ with col2:
 if st.sidebar.button("Ativar Monitoramento Contínuo"):
     st.sidebar.success("Alertas ativados!")
 
+# Gerar sinais
 signals, final_verdict, buy_signals, sell_signals = generate_signals(
     data, 
     rsi_window=st.session_state.user_settings['rsi_window'],
     bb_window=st.session_state.user_settings['bb_window']
 )
 
+# Obter dados adicionais
 sentiment = get_market_sentiment()
 traditional_assets = get_traditional_assets()
 
+# Layout principal
 st.header("📊 Painel Integrado BTC Pro+")
 
+# Métricas superiores
 col1, col2, col3, col4, col5 = st.columns(5)
 
 if 'prices' in data and not data['prices'].empty:
@@ -940,6 +912,7 @@ else:
 
 col5.metric("Análise Final", final_verdict)
 
+# Abas principais
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📈 Mercado", 
     "🆚 Comparativos", 
@@ -1519,6 +1492,7 @@ with tab6:
                     data['difficulty'].to_excel(writer, sheet_name="Difficulty")
             st.success(f"Dados exportados! [Download aqui]({tmp.name})")
 
+# Legenda na barra lateral
 st.sidebar.markdown("""
 **📌 Legenda:**
 - 🟢 **COMPRA**: Indicador positivo
