@@ -115,78 +115,144 @@ def calculate_gaussian_process(price_series, window=30, lookahead=5):
     
     return pd.Series(predictions[:len(price_series)], index=price_series.index)
 
-def get_exchange_flows():
-    """Retorna dados simulados de fluxo de exchanges"""
-    exchanges = ["Binance", "Coinbase", "Kraken", "FTX", "Bitfinex"]
-    inflows = np.random.randint(100, 1000, size=len(exchanges))
-    outflows = np.random.randint(80, 900, size=len(exchanges))
-    netflows = inflows - outflows
-    return pd.DataFrame({
-        'Exchange': exchanges,
-        'Entrada': inflows,
-        'Saída': outflows,
-        'Líquido': netflows
-    })
+def get_liquidation_heatmap():
+    """Obtém dados de liquidações da Binance via API da Coinglass"""
+    try:
+        response = requests.get("https://fapi.coinglass.com/api/futures/liquidation/map?symbol=BTC&timeType=1", 
+                              headers={"accept": "application/json"}, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        if 'data' in data and 'priceList' in data['data'] and 'timeList' in data['data']:
+            df = pd.DataFrame({
+                'price': data['data']['priceList'],
+                'time': data['data']['timeList'],
+                'long': data['data']['longList'],
+                'short': data['data']['shortList']
+            })
+            df['time'] = pd.to_datetime(df['time'], unit='ms')
+            df['net'] = df['long'] - df['short']
+            return df
+    except Exception as e:
+        st.warning(f"Não foi possível obter dados de liquidações: {str(e)}")
+    return pd.DataFrame()
 
-def plot_hashrate_difficulty(data):
-    """Cria gráfico combinado de hashrate e dificuldade"""
-    if 'hashrate' not in data or 'difficulty' not in data:
-        return None
+def get_whale_transactions():
+    """Obtém transações de whales de múltiplas fontes"""
+    whale_data = []
     
-    fig = go.Figure()
+    # 1. Whale Alert API (dados agregados)
+    try:
+        response = requests.get("https://api.whale-alert.io/v1/transactions?api_key=demo&min_value=500000&limit=10", 
+                              timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        if 'transactions' in data:
+            for tx in data['transactions']:
+                whale_data.append({
+                    'timestamp': datetime.fromtimestamp(tx['timestamp']),
+                    'amount': tx['amount'],
+                    'amount_usd': tx['amount_usd'],
+                    'from': tx['from']['owner'],
+                    'to': tx['to']['owner'],
+                    'symbol': tx['symbol'],
+                    'source': 'Whale Alert'
+                })
+    except Exception as e:
+        st.warning(f"Não foi possível obter dados do Whale Alert: {str(e)}")
     
-    # Hashrate
-    if not data['hashrate'].empty:
-        fig.add_trace(go.Scatter(
-            x=data['hashrate']['date'],
-            y=data['hashrate']['y'],
-            name="Hashrate (TH/s)",
-            line=dict(color='blue')
-        ))
+    # 2. Mempool.space (transações on-chain grandes)
+    try:
+        response = requests.get("https://mempool.space/api/v1/transactions", timeout=10)
+        response.raise_for_status()
+        mempool_txs = response.json()
+        
+        large_txs = [tx for tx in mempool_txs if tx['fee'] > 1000000]  # Transações com taxas altas (> 0.01 BTC)
+        
+        for tx in large_txs[:10]:  # Pegar as 10 maiores
+            whale_data.append({
+                'timestamp': datetime.fromtimestamp(tx['status']['block_time']),
+                'amount': tx['fee'] / 100000000,  # Converter satoshis para BTC
+                'amount_usd': (tx['fee'] / 100000000) * 50000,  # Valor aproximado
+                'from': 'Unknown',
+                'to': 'Unknown',
+                'symbol': 'BTC',
+                'source': 'Mempool.space'
+            })
+    except Exception as e:
+        st.warning(f"Não foi possível obter dados do Mempool: {str(e)}")
     
-    # Dificuldade
-    if not data['difficulty'].empty:
-        fig.add_trace(go.Scatter(
-            x=data['difficulty']['date'],
-            y=data['difficulty']['y']/1e12,
-            name="Dificuldade (T)",
-            yaxis="y2",
-            line=dict(color='red')
-        ))
+    # 3. Binance Large Transactions (via API pública)
+    try:
+        response = requests.get("https://api.binance.com/api/v3/trades?symbol=BTCUSDT&limit=1000", timeout=10)
+        response.raise_for_status()
+        trades = response.json()
+        
+        large_trades = [trade for trade in trades if float(trade['quoteQty']) > 1000000]  # Trades > $1M
+        
+        for trade in large_trades[:10]:
+            whale_data.append({
+                'timestamp': datetime.fromtimestamp(trade['time']/1000),
+                'amount': float(trade['qty']),
+                'amount_usd': float(trade['quoteQty']),
+                'from': 'Binance Buyer' if trade['isBuyerMaker'] else 'Binance Seller',
+                'to': 'Binance Market',
+                'symbol': 'BTC',
+                'source': 'Binance'
+            })
+    except Exception as e:
+        st.warning(f"Não foi possível obter dados da Binance: {str(e)}")
     
-    fig.update_layout(
-        title="Hashrate vs Dificuldade de Mineração",
-        yaxis=dict(title="Hashrate (TH/s)", color='blue'),
-        yaxis2=dict(
-            title="Dificuldade (T)",
-            overlaying="y",
-            side="right",
-            color='red'
-        ),
-        hovermode="x unified"
-    )
-    return fig
-
-def plot_whale_activity(data):
-    """Mostra atividade de whales (grandes transações)"""
-    if 'whale_alert' not in data:
-        return None
+    # 4. Kraken Large Trades
+    try:
+        response = requests.get("https://api.kraken.com/0/public/Trades?pair=XBTUSD", timeout=10)
+        response.raise_for_status()
+        kraken_data = response.json()
+        
+        if 'result' in kraken_data and 'XXBTZUSD' in kraken_data['result']:
+            trades = kraken_data['result']['XXBTZUSD']
+            large_trades = [trade for trade in trades if float(trade[1]) * float(trade[0]) > 1000000]  # Trades > $1M
+            
+            for trade in large_trades[:10]:
+                whale_data.append({
+                    'timestamp': datetime.fromtimestamp(trade[2]),
+                    'amount': float(trade[1]),
+                    'amount_usd': float(trade[1]) * float(trade[0]),
+                    'from': 'Kraken Buyer' if trade[3] == 'b' else 'Kraken Seller',
+                    'to': 'Kraken Market',
+                    'symbol': 'BTC',
+                    'source': 'Kraken'
+                })
+    except Exception as e:
+        st.warning(f"Não foi possível obter dados da Kraken: {str(e)}")
     
-    fig = go.Figure(go.Bar(
-        x=data['whale_alert']['date'],
-        y=data['whale_alert']['amount'],
-        name="BTC Movimentado",
-        marker_color='orange',
-        text=data['whale_alert']['exchange']
-    ))
+    # 5. Coinbase Large Trades
+    try:
+        response = requests.get("https://api.pro.coinbase.com/products/BTC-USD/trades", timeout=10)
+        response.raise_for_status()
+        trades = response.json()
+        
+        large_trades = [trade for trade in trades if float(trade['size']) * float(trade['price']) > 1000000]  # Trades > $1M
+        
+        for trade in large_trades[:10]:
+            whale_data.append({
+                'timestamp': datetime.strptime(trade['time'], '%Y-%m-%dT%H:%M:%S.%fZ'),
+                'amount': float(trade['size']),
+                'amount_usd': float(trade['size']) * float(trade['price']),
+                'from': 'Coinbase ' + ('Buyer' if trade['side'] == 'buy' else 'Seller'),
+                'to': 'Coinbase Market',
+                'symbol': 'BTC',
+                'source': 'Coinbase'
+            })
+    except Exception as e:
+        st.warning(f"Não foi possível obter dados da Coinbase: {str(e)}")
     
-    fig.update_layout(
-        title="Atividade Recente de Whales (BTC)",
-        xaxis_title="Data",
-        yaxis_title="Quantidade (BTC)",
-        hovermode="x unified"
-    )
-    return fig
+    if whale_data:
+        df = pd.DataFrame(whale_data)
+        df = df.sort_values('timestamp', ascending=False)
+        return df
+    return pd.DataFrame()
 
 def simulate_event(event, price_series):
     """Simula impacto de eventos no preço com tratamento robusto"""
@@ -411,6 +477,32 @@ def backtest_gp_strategy(df, window=30, lookahead=5, threshold=0.03):
     df = calculate_daily_returns(df)
     return calculate_strategy_returns(df)
 
+def backtest_liquidation_strategy(df, liquidation_threshold=0.05):
+    """Estratégia baseada em dados de liquidações"""
+    if df.empty or 'price' not in df.columns:
+        return pd.DataFrame()
+    
+    df = df.copy()
+    liquidation_data = get_liquidation_heatmap()
+    
+    if not liquidation_data.empty:
+        # Mesclar dados de liquidação com preços por timestamp mais próximo
+        df['time'] = df['date'].dt.floor('h')
+        merged = pd.merge_asof(df.sort_values('time'), 
+                             liquidation_data.sort_values('time'), 
+                             on='time', 
+                             direction='nearest')
+        
+        df['net_liquidation'] = merged['net']
+        df['liquidation_ratio'] = df['net_liquidation'] / df['net_liquidation'].abs().rolling(24).mean()
+        
+        df['signal'] = 0
+        df.loc[df['liquidation_ratio'] > liquidation_threshold, 'signal'] = -1  # Muitas liquidações long -> sinal de venda
+        df.loc[df['liquidation_ratio'] < -liquidation_threshold, 'signal'] = 1   # Muitas liquidações short -> sinal de compra
+    
+    df = calculate_daily_returns(df)
+    return calculate_strategy_returns(df)
+
 def calculate_metrics(df):
     """Calcula métricas de performance com tratamento robusto"""
     metrics = {}
@@ -479,6 +571,8 @@ def optimize_strategy_parameters(data, strategy_name, param_space):
                 df = backtest_stochastic_strategy(data['prices'], **params)
             elif strategy_name == 'Gaussian Process':
                 df = backtest_gp_strategy(data['prices'], **params)
+            elif strategy_name == 'Liquidation':
+                df = backtest_liquidation_strategy(data['prices'], **params)
             else:
                 continue
                 
@@ -544,16 +638,16 @@ def load_data():
             data['prices']['OBV'] = calculate_obv(price_series, volume_series)
             data['prices']['Stoch_K'], data['prices']['Stoch_D'] = calculate_stochastic(price_series)
             
-            # Adicionar apenas o indicador Gaussian Process
+            # Adicionar novos indicadores
             data['prices']['GP_Prediction'] = calculate_gaussian_process(price_series)
+            data['liquidation_heatmap'] = get_liquidation_heatmap()
+            data['whale_transactions'] = get_whale_transactions()
         
         try:
             hr_response = requests.get("https://api.blockchain.info/charts/hash-rate?format=json&timespan=3months", timeout=10)
             hr_response.raise_for_status()
             data['hashrate'] = pd.DataFrame(hr_response.json()["values"])
             data['hashrate']["date"] = pd.to_datetime(data['hashrate']["x"], unit="s")
-            # Converter hashrate para TH/s
-            data['hashrate']['y'] = data['hashrate']['y'] / 1e12
         except Exception:
             data['hashrate'] = pd.DataFrame()
         
@@ -562,8 +656,6 @@ def load_data():
             diff_response.raise_for_status()
             data['difficulty'] = pd.DataFrame(diff_response.json()["values"])
             data['difficulty']["date"] = pd.to_datetime(data['difficulty']["x"], unit="s")
-            # Converter dificuldade para T
-            data['difficulty']['y'] = data['difficulty']['y'] / 1e12
         except Exception:
             data['difficulty'] = pd.DataFrame()
         
@@ -572,12 +664,6 @@ def load_data():
             "coinbase": {"inflow": 800, "outflow": 750, "reserves": 350000},
             "kraken": {"inflow": 600, "outflow": 550, "reserves": 200000}
         }
-        
-        data['whale_alert'] = pd.DataFrame({
-            "date": pd.date_range(end=datetime.now(), periods=5, freq='12H'),
-            "amount": np.random.randint(100, 500, 5),
-            "exchange": ["Binance", "Coinbase", "Kraken", "Unknown", "Binance"]
-        })
         
     except requests.exceptions.RequestException as e:
         st.error(f"Erro na requisição à API: {str(e)}")
@@ -674,11 +760,17 @@ def generate_signals(data, rsi_window=14, bb_window=20):
             stoch_signal = "COMPRA" if stoch_k < 20 and stoch_d < 20 else "VENDA" if stoch_k > 80 and stoch_d > 80 else "NEUTRO"
             signals.append(("Stochastic (14,3)", stoch_signal, f"K:{stoch_k:.1f}, D:{stoch_d:.1f}"))
         
-        # Adicionar apenas o sinal do Gaussian Process
+        # Adicionar sinais dos novos indicadores
         if 'GP_Prediction' in data['prices'].columns and not data['prices']['GP_Prediction'].isna().all():
             gp_pred = data['prices']['GP_Prediction'].iloc[-1]
             gp_signal = "COMPRA" if gp_pred > last_price * 1.03 else "VENDA" if gp_pred < last_price * 0.97 else "NEUTRO"
             signals.append(("Gaussian Process", gp_signal, f"Previsão: ${gp_pred:,.0f}"))
+        
+        if 'liquidation_heatmap' in data and not data['liquidation_heatmap'].empty:
+            last_liquidation = data['liquidation_heatmap'].iloc[-1]
+            liq_signal = "COMPRA" if last_liquidation['net'] < -100 else "VENDA" if last_liquidation['net'] > 100 else "NEUTRO"
+            signals.append(("Liquidações Binance", liq_signal, 
+                          f"Long: {last_liquidation['long']:,.0f} | Short: {last_liquidation['short']:,.0f}"))
     
     except Exception as e:
         st.error(f"Erro ao gerar sinais: {str(e)}")
@@ -845,18 +937,6 @@ with tab1:
             fig = px.line(data['prices'], x="date", y=ma_cols, 
                          title="Preço BTC e Médias Móveis")
             st.plotly_chart(fig, use_container_width=True)
-            
-            # Novo gráfico: Hashrate vs Dificuldade
-            hr_diff_fig = plot_hashrate_difficulty(data)
-            if hr_diff_fig:
-                st.plotly_chart(hr_diff_fig, use_container_width=True)
-            else:
-                st.warning("Dados de hashrate/dificuldade não disponíveis")
-            
-            # Novo gráfico: Atividade de Whales
-            whale_fig = plot_whale_activity(data)
-            if whale_fig:
-                st.plotly_chart(whale_fig, use_container_width=True)
         else:
             st.warning("Dados de preços não disponíveis")
     
@@ -903,26 +983,18 @@ with tab1:
                     stoch_color = "🟢" if stoch_signal[1] == "COMPRA" else "🔴" if stoch_signal[1] == "VENDA" else "🟡"
                     st.markdown(f"{stoch_color} **{stoch_signal[0]}**: {stoch_signal[1]} ({stoch_signal[2]})")
                 
-                # Mostrar apenas o sinal do Gaussian Process
+                # Adicionar novos sinais
                 gp_signal = next((s for s in signals if "Gaussian Process" in s[0]), None)
                 if gp_signal:
                     gp_color = "🟢" if gp_signal[1] == "COMPRA" else "🔴" if gp_signal[1] == "VENDA" else "🟡"
                     st.markdown(f"{gp_color} **{gp_signal[0]}**: {gp_signal[1]} ({gp_signal[2]})")
+                
+                liq_signal = next((s for s in signals if "Liquidações" in s[0]), None)
+                if liq_signal:
+                    liq_color = "🟢" if liq_signal[1] == "COMPRA" else "🔴" if liq_signal[1] == "VENDA" else "🟡"
+                    st.markdown(f"{liq_color} **{liq_signal[0]}**: {liq_signal[1]} ({liq_signal[2]})")
         
         st.divider()
-        
-        st.subheader("📊 Fluxo de Exchanges")
-        exchange_flows = get_exchange_flows()
-        st.dataframe(
-            exchange_flows.style
-            .background_gradient(cmap='RdYlGn', subset=['Líquido'])
-            .format({'Entrada': '{:,.0f}', 'Saída': '{:,.0f}', 'Líquido': '{:,.0f}'}),
-            use_container_width=True
-        )
-        st.caption("Valores positivos (verde) indicam mais entrada que saída na exchange")
-        
-        st.divider()
-        
         st.subheader("📌 Análise Consolidada")
         
         if final_verdict == "✅ FORTE COMPRA":
@@ -951,6 +1023,34 @@ with tab1:
                    {'range': [50, 75], 'color': "yellow"},
                    {'range': [75, 100], 'color': "green"}]}))
     st.plotly_chart(fig_sent, use_container_width=True)
+    
+    st.subheader("🐋 Atividade Recente de Whales")
+    if 'whale_transactions' in data and not data['whale_transactions'].empty:
+        whale_df = data['whale_transactions'].head(10)
+        
+        st.write(f"**Últimas 10 transações de whales (> $1M)**")
+        
+        for _, row in whale_df.iterrows():
+            direction = "🟢 COMPRA" if "Buyer" in row['from'] else "🔴 VENDA" if "Seller" in row['from'] else "🔵 TRANSFER"
+            st.markdown(f"""
+            - **{row['timestamp'].strftime('%Y-%m-%d %H:%M')}**: {direction}  
+              **{row['amount']:,.2f} {row['symbol']}** (${row['amount_usd']:,.0f})  
+              *{row['from']} → {row['to']}* (Fonte: {row['source']})
+            """)
+        
+        # Gráfico de atividades de whales por exchange
+        exchange_counts = whale_df['source'].value_counts().reset_index()
+        exchange_counts.columns = ['Exchange', 'Count']
+        
+        fig_exchanges = px.bar(
+            exchange_counts, 
+            x='Exchange', 
+            y='Count', 
+            title='Distribuição de Atividades de Whales por Exchange'
+        )
+        st.plotly_chart(fig_exchanges, use_container_width=True)
+    else:
+        st.warning("Nenhuma atividade recente de whales encontrada")
 
 with tab2:
     st.subheader("📌 BTC vs Ativos Tradicionais")
@@ -981,7 +1081,7 @@ with tab3:
     
     strategy = st.selectbox(
         "Escolha sua Estratégia:",
-        ["RSI", "MACD", "Bollinger", "EMA Cross", "Volume", "OBV", "Stochastic", "Gaussian Process"],
+        ["RSI", "MACD", "Bollinger", "EMA Cross", "Volume", "OBV", "Stochastic", "Gaussian Process", "Liquidation"],
         key="backtest_strategy"
     )
     
@@ -1038,6 +1138,10 @@ with tab3:
                 threshold = st.slider("Limiar de Sinal (%)", 1.0, 10.0, 3.0, 0.5)
                 df = backtest_gp_strategy(data['prices'], window, lookahead, threshold/100)
                 
+            elif strategy == "Liquidation":
+                threshold = st.slider("Limiar de Liquidações", 0.01, 0.2, 0.05, 0.01)
+                df = backtest_liquidation_strategy(data['prices'], threshold)
+                
         except Exception as e:
             st.error(f"Erro ao configurar estratégia: {str(e)}")
             st.stop()
@@ -1085,6 +1189,12 @@ with tab3:
             - **Compra**: Previsão > Preço Atual + Limiar
             - **Venda**: Previsão < Preço Atual - Limiar
             - Usa regressão não-linear para prever tendências
+            """)
+        elif strategy == "Liquidation":
+            st.markdown("""
+            - **Compra**: Muitas liquidações de posições short
+            - **Venda**: Muitas liquidações de posições long
+            - Baseado em dados da Binance via Coinglass
             """)
     
     if df.empty:
@@ -1185,6 +1295,10 @@ with tab3:
                     'window': range(20, 41, 5),
                     'lookahead': range(3, 8),
                     'threshold': [0.02, 0.03, 0.04, 0.05]
+                }
+            elif strategy == "Liquidation":
+                param_space = {
+                    'liquidation_threshold': [0.03, 0.05, 0.07, 0.10]
                 }
             
             best_params, best_sharpe, best_df = optimize_strategy_parameters(
@@ -1340,7 +1454,7 @@ with tab5:
             fig_stoch.update_layout(title="Stochastic Oscillator (14,3)")
             st.plotly_chart(fig_stoch, use_container_width=True)
         
-        # Mostrar apenas o Gaussian Process
+        # Adicionar visualizações para os novos indicadores
         if 'GP_Prediction' in data['prices'].columns and not data['prices']['GP_Prediction'].isna().all():
             fig_gp = go.Figure()
             fig_gp.add_trace(go.Scatter(
@@ -1356,6 +1470,23 @@ with tab5:
             ))
             fig_gp.update_layout(title="Regressão de Processo Gaussiano (Previsão)")
             st.plotly_chart(fig_gp, use_container_width=True)
+        
+        if 'liquidation_heatmap' in data and not data['liquidation_heatmap'].empty:
+            fig_liq = go.Figure()
+            fig_liq.add_trace(go.Scatter(
+                x=data['liquidation_heatmap']['time'],
+                y=data['liquidation_heatmap']['long'],
+                name="Liquidações Long",
+                line=dict(color='red')
+            ))
+            fig_liq.add_trace(go.Scatter(
+                x=data['liquidation_heatmap']['time'],
+                y=data['liquidation_heatmap']['short'],
+                name="Liquidações Short",
+                line=dict(color='green')
+            ))
+            fig_liq.update_layout(title="Mapa de Calor de Liquidações (Binance BTC/USDT)")
+            st.plotly_chart(fig_liq, use_container_width=True)
 
 with tab6:
     st.subheader("📤 Exportar Dados Completo")
@@ -1399,10 +1530,10 @@ with tab6:
                     data['prices'].to_excel(writer, sheet_name="BTC Prices")
                 if not traditional_assets.empty:
                     traditional_assets.to_excel(writer, sheet_name="Traditional Assets")
-                if 'hashrate' in data and not data['hashrate'].empty:
-                    data['hashrate'].to_excel(writer, sheet_name="Hashrate")
-                if 'difficulty' in data and not data['difficulty'].empty:
-                    data['difficulty'].to_excel(writer, sheet_name="Difficulty")
+                if 'liquidation_heatmap' in data and not data['liquidation_heatmap'].empty:
+                    data['liquidation_heatmap'].to_excel(writer, sheet_name="Liquidation Heatmap")
+                if 'whale_transactions' in data and not data['whale_transactions'].empty:
+                    data['whale_transactions'].to_excel(writer, sheet_name="Whale Transactions")
             st.success(f"Dados exportados! [Download aqui]({tmp.name})")
 
 st.sidebar.markdown("""
@@ -1422,9 +1553,10 @@ st.sidebar.markdown("""
 6. OBV (fluxo de capital)
 7. Stochastic (sobrecompra/sobrevenda)
 8. Regressão de Processo Gaussiano (previsão)
-9. Fluxo de Exchanges
-10. Hashrate vs Dificuldade
-11. Atividade de Whales
-12. Análise Sentimental
-13. Comparação com Mercado Tradicional
+9. Mapa de Calor de Liquidações (Binance)
+10. Fluxo de Exchanges
+11. Hashrate vs Dificuldade
+12. Atividade de Whales
+13. Análise Sentimental
+14. Comparação com Mercado Tradicional
 """)
