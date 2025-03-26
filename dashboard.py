@@ -126,32 +126,32 @@ def calculate_gaussian_process(price_series, window=30, lookahead=5):
 # ======================
 @st.cache_data(ttl=3600)
 def get_dune_whale_data():
-    """Busca dados REAIS de whales do Dune Analytics"""
+    """Busca dados de whales do Dune Analytics com tratamento de erro robusto"""
     try:
         url = f"https://api.dune.com/api/v1/query/{WHALE_QUERY_ID}/results"
         headers = {"X-Dune-API-Key": DUNE_API_KEY}
         
         response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()  # Lança erro para status 4xx/5xx
         data = response.json()
-        
-        # Processar dados
+
+        # Verificação em profundidade da estrutura de dados
+        if not data.get('result', {}).get('rows'):
+            raise ValueError("Estrutura de dados inválida - 'rows' não encontrado")
+
         df = pd.DataFrame(data['result']['rows'])
-        if 'time' in df.columns:
-            df['date'] = pd.to_datetime(df['time'])
-        elif 'block_time' in df.columns:
-            df['date'] = pd.to_datetime(df['block_time'])
+
+        # Processamento seguro dos campos
+        df['date'] = df.get('time') or df.get('block_time') or pd.NaT
+        if df['date'].isna().all():
+            raise ValueError("Nenhuma coluna de data válida encontrada")
         
-        # Converter valores
-        if 'value' in df.columns:
-            df['amount_btc'] = df['value'] / 1e8  # Converter satoshis para BTC
-        elif 'amount' in df.columns:
-            df['amount_btc'] = df['amount']
-            
-        if 'amount_usd' not in df.columns and 'value_usd' in df.columns:
-            df['amount_usd'] = df['value_usd']
-            
+        df['date'] = pd.to_datetime(df['date'])
+        df['amount_btc'] = df.get('value', df.get('amount', 0)) / 1e8
+        df['amount_usd'] = df.get('value_usd', df.get('amount_usd', 0))
+
         return df[['date', 'amount_btc', 'amount_usd', 'from_address', 'to_address']].dropna()
-        
+
     except Exception as e:
         st.warning(f"⚠️ Falha na API. Dados simulados serão usados. Erro: {str(e)}")
         return pd.DataFrame({
@@ -161,7 +161,7 @@ def get_dune_whale_data():
             "from_address": ["Exchange A", "Wallet X", "Unknown", "Institution", "Exchange B"],
             "to_address": ["Wallet Y", "Exchange C", "Institution", "Wallet Z", "Unknown"]
         })
-
+        
 def get_exchange_flows():
     """Retorna dados simulados de fluxo de exchanges"""
     exchanges = ["Binance", "Coinbase", "Kraken", "FTX", "Bitfinex"]
