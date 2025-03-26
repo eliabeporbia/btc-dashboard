@@ -115,6 +115,79 @@ def calculate_gaussian_process(price_series, window=30, lookahead=5):
     
     return pd.Series(predictions[:len(price_series)], index=price_series.index)
 
+def get_exchange_flows():
+    """Retorna dados simulados de fluxo de exchanges"""
+    exchanges = ["Binance", "Coinbase", "Kraken", "FTX", "Bitfinex"]
+    inflows = np.random.randint(100, 1000, size=len(exchanges))
+    outflows = np.random.randint(80, 900, size=len(exchanges))
+    netflows = inflows - outflows
+    return pd.DataFrame({
+        'Exchange': exchanges,
+        'Entrada': inflows,
+        'Saída': outflows,
+        'Líquido': netflows
+    })
+
+def plot_hashrate_difficulty(data):
+    """Cria gráfico combinado de hashrate e dificuldade"""
+    if 'hashrate' not in data or 'difficulty' not in data:
+        return None
+    
+    fig = go.Figure()
+    
+    # Hashrate
+    if not data['hashrate'].empty:
+        fig.add_trace(go.Scatter(
+            x=data['hashrate']['date'],
+            y=data['hashrate']['y'],
+            name="Hashrate (TH/s)",
+            line=dict(color='blue')
+        ))
+    
+    # Dificuldade
+    if not data['difficulty'].empty:
+        fig.add_trace(go.Scatter(
+            x=data['difficulty']['date'],
+            y=data['difficulty']['y']/1e12,
+            name="Dificuldade (T)",
+            yaxis="y2",
+            line=dict(color='red')
+        ))
+    
+    fig.update_layout(
+        title="Hashrate vs Dificuldade de Mineração",
+        yaxis=dict(title="Hashrate (TH/s)", color='blue'),
+        yaxis2=dict(
+            title="Dificuldade (T)",
+            overlaying="y",
+            side="right",
+            color='red'
+        ),
+        hovermode="x unified"
+    )
+    return fig
+
+def plot_whale_activity(data):
+    """Mostra atividade de whales (grandes transações)"""
+    if 'whale_alert' not in data:
+        return None
+    
+    fig = go.Figure(go.Bar(
+        x=data['whale_alert']['date'],
+        y=data['whale_alert']['amount'],
+        name="BTC Movimentado",
+        marker_color='orange',
+        text=data['whale_alert']['exchange']
+    ))
+    
+    fig.update_layout(
+        title="Atividade Recente de Whales (BTC)",
+        xaxis_title="Data",
+        yaxis_title="Quantidade (BTC)",
+        hovermode="x unified"
+    )
+    return fig
+
 def simulate_event(event, price_series):
     """Simula impacto de eventos no preço com tratamento robusto"""
     if not isinstance(price_series, pd.Series):
@@ -479,6 +552,8 @@ def load_data():
             hr_response.raise_for_status()
             data['hashrate'] = pd.DataFrame(hr_response.json()["values"])
             data['hashrate']["date"] = pd.to_datetime(data['hashrate']["x"], unit="s")
+            # Converter hashrate para TH/s
+            data['hashrate']['y'] = data['hashrate']['y'] / 1e12
         except Exception:
             data['hashrate'] = pd.DataFrame()
         
@@ -487,6 +562,8 @@ def load_data():
             diff_response.raise_for_status()
             data['difficulty'] = pd.DataFrame(diff_response.json()["values"])
             data['difficulty']["date"] = pd.to_datetime(data['difficulty']["x"], unit="s")
+            # Converter dificuldade para T
+            data['difficulty']['y'] = data['difficulty']['y'] / 1e12
         except Exception:
             data['difficulty'] = pd.DataFrame()
         
@@ -497,9 +574,9 @@ def load_data():
         }
         
         data['whale_alert'] = pd.DataFrame({
-            "date": [datetime.now() - timedelta(hours=h) for h in [1, 3, 5, 8, 12]],
-            "amount": [250, 180, 120, 300, 150],
-            "exchange": ["Binance", "Coinbase", "Kraken", "Binance", "FTX"]
+            "date": pd.date_range(end=datetime.now(), periods=5, freq='12H'),
+            "amount": np.random.randint(100, 500, 5),
+            "exchange": ["Binance", "Coinbase", "Kraken", "Unknown", "Binance"]
         })
         
     except requests.exceptions.RequestException as e:
@@ -768,6 +845,18 @@ with tab1:
             fig = px.line(data['prices'], x="date", y=ma_cols, 
                          title="Preço BTC e Médias Móveis")
             st.plotly_chart(fig, use_container_width=True)
+            
+            # Novo gráfico: Hashrate vs Dificuldade
+            hr_diff_fig = plot_hashrate_difficulty(data)
+            if hr_diff_fig:
+                st.plotly_chart(hr_diff_fig, use_container_width=True)
+            else:
+                st.warning("Dados de hashrate/dificuldade não disponíveis")
+            
+            # Novo gráfico: Atividade de Whales
+            whale_fig = plot_whale_activity(data)
+            if whale_fig:
+                st.plotly_chart(whale_fig, use_container_width=True)
         else:
             st.warning("Dados de preços não disponíveis")
     
@@ -821,6 +910,19 @@ with tab1:
                     st.markdown(f"{gp_color} **{gp_signal[0]}**: {gp_signal[1]} ({gp_signal[2]})")
         
         st.divider()
+        
+        st.subheader("📊 Fluxo de Exchanges")
+        exchange_flows = get_exchange_flows()
+        st.dataframe(
+            exchange_flows.style
+            .background_gradient(cmap='RdYlGn', subset=['Líquido'])
+            .format({'Entrada': '{:,.0f}', 'Saída': '{:,.0f}', 'Líquido': '{:,.0f}'}),
+            use_container_width=True
+        )
+        st.caption("Valores positivos (verde) indicam mais entrada que saída na exchange")
+        
+        st.divider()
+        
         st.subheader("📌 Análise Consolidada")
         
         if final_verdict == "✅ FORTE COMPRA":
@@ -1297,6 +1399,10 @@ with tab6:
                     data['prices'].to_excel(writer, sheet_name="BTC Prices")
                 if not traditional_assets.empty:
                     traditional_assets.to_excel(writer, sheet_name="Traditional Assets")
+                if 'hashrate' in data and not data['hashrate'].empty:
+                    data['hashrate'].to_excel(writer, sheet_name="Hashrate")
+                if 'difficulty' in data and not data['difficulty'].empty:
+                    data['difficulty'].to_excel(writer, sheet_name="Difficulty")
             st.success(f"Dados exportados! [Download aqui]({tmp.name})")
 
 st.sidebar.markdown("""
