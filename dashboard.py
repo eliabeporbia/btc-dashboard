@@ -1,11 +1,4 @@
-# ======================
-# CONFIGURAÇÕES INICIAIS
-# ======================
-
-# Configuração inicial da página - DEVE SER O PRIMEIRO COMANDO STREAMLIT
-st.set_page_config(layout="wide", page_title="BTC Super Dashboard Pro+")
-
-# Agora importe todas as bibliotecas necessárias
+# Primeiro, importe todas as bibliotecas necessárias
 import streamlit as st
 import requests
 import pandas as pd
@@ -26,16 +19,17 @@ from sklearn.gaussian_process.kernels import RBF, ConstantKernel
 from binance import ThreadedWebsocketManager
 from streamlit_autorefresh import st_autorefresh
 
+# ======================
+# CONFIGURAÇÕES INICIAIS
+# ======================
+
+# Configuração inicial da página - DEVE SER O PRIMEIRO COMANDO STREAMLIT APÓS OS IMPORTS
+st.set_page_config(layout="wide", page_title="BTC Super Dashboard Pro+")
+
 # Configuração de auto-refresh
 refresh_interval = 60  # segundos
 st_autorefresh(interval=refresh_interval * 1000, limit=None, key="auto_refresh")
 
-st.title("🚀 BTC Super Dashboard Pro+ - Tempo Real")
-
-# Restante do seu código continua a partir daqui...
-
-# Configuração inicial da página
-st.set_page_config(layout="wide", page_title="BTC Super Dashboard Pro+")
 st.title("🚀 BTC Super Dashboard Pro+ - Tempo Real")
 
 # ======================
@@ -44,6 +38,8 @@ st.title("🚀 BTC Super Dashboard Pro+ - Tempo Real")
 DUNE_API_KEY = "is5jjmAQzT7jd3V97mQzbRnoOCuTSfDg"
 WHALE_QUERY_ID = "2973476"
 headers = {"X-Dune-API-Key": DUNE_API_KEY}
+
+# [...] Restante do seu código original continua a partir daqui
 
 # ======================
 # WEBSOCKET PARA DADOS EM TEMPO REAL
