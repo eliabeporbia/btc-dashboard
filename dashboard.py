@@ -14,12 +14,30 @@ from itertools import product
 import re
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from datetime import datetime
 
 # ======================
 # CONFIGURAÇÕES INICIAIS
 # ======================
 st.set_page_config(layout="wide", page_title="BTC Super Dashboard Pro+")
-st.title("🚀 BTC Super Dashboard Pro+ - Edição Premium")
+st.title("🚀 BTC Super Dashboard Pro+ - Edição Premium Plus")
+
+# ======================
+# NOVAS CONSTANTES
+# ======================
+INDICATOR_WEIGHTS = {
+    'order_blocks': 2.0,
+    'gaussian_process': 1.0,
+    'rsi': 1.5,
+    'macd': 1.3,
+    'bollinger': 1.2,
+    'volume': 1.1,
+    'obv': 1.1,
+    'stochastic': 1.1,
+    'ma_cross': 1.0
+}
 
 # ======================
 # FUNÇÕES DE CÁLCULO (ATUALIZADAS)
@@ -168,7 +186,8 @@ def identify_order_blocks(df, swing_length=10, show_bull=3, show_bear=3, use_bod
                 'high': high,
                 'low': low,
                 'trigger_price': row['close'],
-                'broken': False
+                'broken': False,
+                'weight': INDICATOR_WEIGHTS['order_blocks']
             })
     
     # Bearish Order Blocks (venda)
@@ -192,7 +211,8 @@ def identify_order_blocks(df, swing_length=10, show_bull=3, show_bear=3, use_bod
                 'high': high,
                 'low': low,
                 'trigger_price': row['close'],
-                'broken': False
+                'broken': False,
+                'weight': INDICATOR_WEIGHTS['order_blocks']
             })
     
     # Verificar Breaker Blocks
@@ -278,6 +298,54 @@ def plot_order_blocks(fig, blocks, current_price):
                              line=dict(color="green", width=1, dash="dot"))
     
     return fig
+
+def detect_support_resistance_clusters(prices, n_clusters=5):
+    """
+    Identifica zonas de suporte/resistência usando clusterização K-Means
+    """
+    if len(prices) < n_clusters:
+        return []
+    
+    # Preparar dados para clusterização
+    X = np.array(prices).reshape(-1, 1)
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    
+    # Aplicar K-Means
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    kmeans.fit(X_scaled)
+    
+    # Obter centros dos clusters e converter de volta para escala original
+    clusters = scaler.inverse_transform(kmeans.cluster_centers_)
+    clusters = sorted([c[0] for c in clusters])
+    
+    return clusters
+
+def detect_divergences(price_series, indicator_series, window=14):
+    """
+    Detecta divergências entre preço e um indicador (RSI, MACD, etc.)
+    Retorna DataFrame com pontos de divergência
+    """
+    df = pd.DataFrame({
+        'price': price_series,
+        'indicator': indicator_series
+    })
+    
+    # Identificar máximos e mínimos
+    df['price_peaks'] = df['price'].rolling(window, center=True).max() == df['price']
+    df['price_valleys'] = df['price'].rolling(window, center=True).min() == df['price']
+    df['indicator_peaks'] = df['indicator'].rolling(window, center=True).max() == df['indicator']
+    df['indicator_valleys'] = df['indicator'].rolling(window, center=True).min() == df['indicator']
+    
+    # Detectar divergências
+    bearish_div = (df['price_peaks'] & (df['indicator'].shift(1) > df['indicator']))
+    bullish_div = (df['price_valleys'] & (df['indicator'].shift(1) < df['indicator']))
+    
+    df['divergence'] = 0
+    df.loc[bearish_div, 'divergence'] = -1  # Divergência de baixa
+    df.loc[bullish_div, 'divergence'] = 1   # Divergência de alta
+    
+    return df
 
 def get_exchange_flows():
     """Retorna dados simulados de fluxo de exchanges"""
@@ -418,6 +486,13 @@ def get_traditional_assets():
     
     return pd.concat(dfs) if dfs else pd.DataFrame()
 
+def filter_news_by_confidence(news_data, min_confidence=0.7):
+    """Filtra notícias por confiança mínima"""
+    if not news_data:
+        return []
+    
+    return [news for news in news_data if news.get('confidence', 0) >= min_confidence]
+
 # ======================
 # FUNÇÕES DE BACKTESTING (REVISTAS E APRIMORADAS)
 # ======================
@@ -455,8 +530,8 @@ def backtest_rsi_strategy(df, rsi_window=14, overbought=70, oversold=30):
     df['RSI'] = calculate_rsi(df['price'], rsi_window)
     
     df['signal'] = 0
-    df.loc[(df['RSI'] < oversold) & (df['price'] > df['MA30']), 'signal'] = 1
-    df.loc[(df['RSI'] > overbought) & (df['price'] < df['MA30']), 'signal'] = -1
+    df.loc[(df['RSI'] < oversold) & (df['price'] > df['MA30']), 'signal'] = 1 * INDICATOR_WEIGHTS['rsi']
+    df.loc[(df['RSI'] > overbought) & (df['price'] < df['MA30']), 'signal'] = -1 * INDICATOR_WEIGHTS['rsi']
     
     df = calculate_daily_returns(df)
     return calculate_strategy_returns(df)
@@ -470,11 +545,11 @@ def backtest_macd_strategy(df, fast=12, slow=26, signal=9):
     df['MACD'], df['MACD_Signal'] = calculate_macd(df['price'], fast, slow, signal)
     
     df['signal'] = 0
-    df.loc[df['MACD'] > 0, 'signal'] = 1
-    df.loc[df['MACD'] < 0, 'signal'] = -1
+    df.loc[df['MACD'] > 0, 'signal'] = 1 * INDICATOR_WEIGHTS['macd']
+    df.loc[df['MACD'] < 0, 'signal'] = -1 * INDICATOR_WEIGHTS['macd']
     
-    df.loc[(df['MACD'] > df['MACD_Signal']) & (df['MACD'] > 0), 'signal'] = 1.5
-    df.loc[(df['MACD'] < df['MACD_Signal']) & (df['MACD'] < 0), 'signal'] = -1.5
+    df.loc[(df['MACD'] > df['MACD_Signal']) & (df['MACD'] > 0), 'signal'] = 1.5 * INDICATOR_WEIGHTS['macd']
+    df.loc[(df['MACD'] < df['MACD_Signal']) & (df['MACD'] < 0), 'signal'] = -1.5 * INDICATOR_WEIGHTS['macd']
     
     df = calculate_daily_returns(df)
     return calculate_strategy_returns(df)
@@ -489,9 +564,9 @@ def backtest_bollinger_strategy(df, window=20, num_std=2):
     df['MA'] = df['price'].rolling(window).mean()
     
     df['signal'] = 0
-    df.loc[df['price'] < df['BB_Lower'], 'signal'] = 1
-    df.loc[(df['price'] > df['MA']) & (df['signal'].shift(1) == 1), 'signal'] = 0.5
-    df.loc[df['price'] > df['BB_Upper'], 'signal'] = -1
+    df.loc[df['price'] < df['BB_Lower'], 'signal'] = 1 * INDICATOR_WEIGHTS['bollinger']
+    df.loc[(df['price'] > df['MA']) & (df['signal'].shift(1) == 1), 'signal'] = 0.5 * INDICATOR_WEIGHTS['bollinger']
+    df.loc[df['price'] > df['BB_Upper'], 'signal'] = -1 * INDICATOR_WEIGHTS['bollinger']
     
     df = calculate_daily_returns(df)
     return calculate_strategy_returns(df)
@@ -506,8 +581,8 @@ def backtest_ema_cross_strategy(df, short_window=9, long_window=21):
     df['EMA_Long'] = calculate_ema(df['price'], long_window)
     
     df['signal'] = 0
-    df.loc[df['EMA_Short'] > df['EMA_Long'], 'signal'] = 1
-    df.loc[df['EMA_Short'] < df['EMA_Long'], 'signal'] = -1
+    df.loc[df['EMA_Short'] > df['EMA_Long'], 'signal'] = 1 * INDICATOR_WEIGHTS['ma_cross']
+    df.loc[df['EMA_Short'] < df['EMA_Long'], 'signal'] = -1 * INDICATOR_WEIGHTS['ma_cross']
     
     df = calculate_daily_returns(df)
     return calculate_strategy_returns(df)
@@ -522,8 +597,8 @@ def backtest_volume_strategy(df, volume_window=20, threshold=1.5):
     df['Volume_Ratio'] = df['volume'] / df['Volume_MA']
     
     df['signal'] = 0
-    df.loc[(df['Volume_Ratio'] > threshold) & (df['price'].diff() > 0), 'signal'] = 1
-    df.loc[(df['Volume_Ratio'] > threshold) & (df['price'].diff() < 0), 'signal'] = -1
+    df.loc[(df['Volume_Ratio'] > threshold) & (df['price'].diff() > 0), 'signal'] = 1 * INDICATOR_WEIGHTS['volume']
+    df.loc[(df['Volume_Ratio'] > threshold) & (df['price'].diff() < 0), 'signal'] = -1 * INDICATOR_WEIGHTS['volume']
     
     df = calculate_daily_returns(df)
     return calculate_strategy_returns(df)
@@ -539,8 +614,8 @@ def backtest_obv_strategy(df, obv_window=20, price_window=30):
     df['Price_MA'] = df['price'].rolling(price_window).mean()
     
     df['signal'] = 0
-    df.loc[(df['OBV'] > df['OBV_MA']) & (df['price'] > df['Price_MA']), 'signal'] = 1
-    df.loc[(df['OBV'] < df['OBV_MA']) & (df['price'] < df['Price_MA']), 'signal'] = -1
+    df.loc[(df['OBV'] > df['OBV_MA']) & (df['price'] > df['Price_MA']), 'signal'] = 1 * INDICATOR_WEIGHTS['obv']
+    df.loc[(df['OBV'] < df['OBV_MA']) & (df['price'] < df['Price_MA']), 'signal'] = -1 * INDICATOR_WEIGHTS['obv']
     
     df = calculate_daily_returns(df)
     return calculate_strategy_returns(df)
@@ -554,8 +629,8 @@ def backtest_stochastic_strategy(df, k_window=14, d_window=3, overbought=80, ove
     df['Stoch_K'], df['Stoch_D'] = calculate_stochastic(df['price'], k_window, d_window)
     
     df['signal'] = 0
-    df.loc[(df['Stoch_K'] < oversold) & (df['Stoch_D'] < oversold), 'signal'] = 1
-    df.loc[(df['Stoch_K'] > overbought) & (df['Stoch_D'] > overbought), 'signal'] = -1
+    df.loc[(df['Stoch_K'] < oversold) & (df['Stoch_D'] < oversold), 'signal'] = 1 * INDICATOR_WEIGHTS['stochastic']
+    df.loc[(df['Stoch_K'] > overbought) & (df['Stoch_D'] > overbought), 'signal'] = -1 * INDICATOR_WEIGHTS['stochastic']
     
     df = calculate_daily_returns(df)
     return calculate_strategy_returns(df)
@@ -569,8 +644,8 @@ def backtest_gp_strategy(df, window=30, lookahead=5, threshold=0.03):
     df['GP_Prediction'] = calculate_gaussian_process(df['price'], window, lookahead)
     
     df['signal'] = 0
-    df.loc[df['GP_Prediction'] > df['price'] * (1 + threshold), 'signal'] = 1
-    df.loc[df['GP_Prediction'] < df['price'] * (1 - threshold), 'signal'] = -1
+    df.loc[df['GP_Prediction'] > df['price'] * (1 + threshold), 'signal'] = 1 * INDICATOR_WEIGHTS['gaussian_process']
+    df.loc[df['GP_Prediction'] < df['price'] * (1 - threshold), 'signal'] = -1 * INDICATOR_WEIGHTS['gaussian_process']
     
     df = calculate_daily_returns(df)
     return calculate_strategy_returns(df)
@@ -592,14 +667,14 @@ def backtest_order_block_strategy(df, swing_length=10, use_body=True):
                 mask = (df['date'] > block['end_date']) & \
                        (df['price'] >= block['low']) & \
                        (df['price'] <= block['high'])
-                df.loc[mask, 'signal'] = 1
+                df.loc[mask, 'signal'] = 1 * block['weight']
                 
             elif block['type'] == 'bearish_ob':
                 # Sinal de venda quando o preço retorna ao bloco de venda
                 mask = (df['date'] > block['end_date']) & \
                        (df['price'] >= block['low']) & \
                        (df['price'] <= block['high'])
-                df.loc[mask, 'signal'] = -1
+                df.loc[mask, 'signal'] = -1 * block['weight']
         
         else:
             if block['breaker_type'] == 'bullish_breaker':
@@ -607,14 +682,14 @@ def backtest_order_block_strategy(df, swing_length=10, use_body=True):
                 mask = (df['date'] > block['end_date']) & \
                        (df['price'] >= block['low'] * 0.99) & \
                        (df['price'] <= block['high'] * 1.01)
-                df.loc[mask, 'signal'] = -1
+                df.loc[mask, 'signal'] = -1 * block['weight']
                 
             elif block['breaker_type'] == 'bearish_breaker':
                 # Sinal de compra quando o preço testa um bearish breaker (suporte)
                 mask = (df['date'] > block['end_date']) & \
                        (df['price'] >= block['low'] * 0.99) & \
                        (df['price'] <= block['high'] * 1.01)
-                df.loc[mask, 'signal'] = 1
+                df.loc[mask, 'signal'] = 1 * block['weight']
     
     df = calculate_daily_returns(df)
     return calculate_strategy_returns(df)
@@ -760,6 +835,14 @@ def load_data():
             
             # Adicionar apenas o indicador Gaussian Process
             data['prices']['GP_Prediction'] = calculate_gaussian_process(price_series)
+            
+            # Detectar divergências RSI
+            rsi_divergences = detect_divergences(price_series, data['prices']['RSI_14'])
+            data['prices']['RSI_Divergence'] = rsi_divergences['divergence']
+            
+            # Detectar zonas de suporte/resistência
+            support_resistance = detect_support_resistance_clusters(price_series.tail(90).values)
+            data['support_resistance'] = support_resistance
         
         try:
             hr_response = requests.get("https://api.blockchain.info/charts/hash-rate?format=json&timespan=3months", timeout=10)
@@ -792,6 +875,13 @@ def load_data():
             "amount": np.random.randint(100, 500, 5),
             "exchange": ["Binance", "Coinbase", "Kraken", "Unknown", "Binance"]
         })
+        
+        # Dados de notícias simulados
+        data['news'] = [
+            {"title": "ETF de Bitcoin aprovado", "date": datetime.now() - timedelta(days=2), "confidence": 0.85},
+            {"title": "Reguladores alertam sobre criptomoedas", "date": datetime.now() - timedelta(days=1), "confidence": 0.75},
+            {"title": "Grande empresa anuncia adoção do Bitcoin", "date": datetime.now(), "confidence": 0.65}
+        ]
         
     except requests.exceptions.RequestException as e:
         st.error(f"Erro na requisição à API: {str(e)}")
@@ -839,7 +929,7 @@ def generate_signals(data, rsi_window=14, bb_window=20):
             else:
                 signal = "COMPRA" if values[0] > values[1] else "VENDA"
                 change = (values[0]/values[1] - 1)
-            signals.append((name, signal, f"{change:.2%}"))
+            signals.append((name, signal, f"{change:.2%}", INDICATOR_WEIGHTS['ma_cross']))
         
         rsi_col = f'RSI_{rsi_window}'
         if rsi_col not in data['prices'].columns:
@@ -848,12 +938,12 @@ def generate_signals(data, rsi_window=14, bb_window=20):
         if not data['prices'][rsi_col].isna().all():
             rsi = data['prices'][rsi_col].iloc[-1]
             rsi_signal = "COMPRA" if rsi < 30 else "VENDA" if rsi > 70 else "NEUTRO"
-            signals.append((f"RSI ({rsi_window})", rsi_signal, f"{rsi:.2f}"))
+            signals.append((f"RSI ({rsi_window})", rsi_signal, f"{rsi:.2f}", INDICATOR_WEIGHTS['rsi']))
         
         if 'MACD' in data['prices'].columns and not data['prices']['MACD'].isna().all():
             macd = data['prices']['MACD'].iloc[-1]
             macd_signal = "COMPRA" if macd > 0 else "VENDA"
-            signals.append(("MACD", macd_signal, f"{macd:.2f}"))
+            signals.append(("MACD", macd_signal, f"{macd:.2f}", INDICATOR_WEIGHTS['macd']))
         
         bb_upper_col = f'BB_Upper_{bb_window}'
         bb_lower_col = f'BB_Lower_{bb_window}'
@@ -867,32 +957,32 @@ def generate_signals(data, rsi_window=14, bb_window=20):
             bb_upper = data['prices'][bb_upper_col].iloc[-1]
             bb_lower = data['prices'][bb_lower_col].iloc[-1]
             bb_signal = "COMPRA" if last_price < bb_lower else "VENDA" if last_price > bb_upper else "NEUTRO"
-            signals.append((f"Bollinger Bands ({bb_window})", bb_signal, f"Atual: ${last_price:,.0f}"))
+            signals.append((f"Bollinger Bands ({bb_window})", bb_signal, f"Atual: ${last_price:,.0f}", INDICATOR_WEIGHTS['bollinger']))
         
         if 'volume' in data['prices'].columns:
             volume_ma = data['prices']['volume'].rolling(20).mean().iloc[-1]
             last_volume = data['prices']['volume'].iloc[-1]
             volume_ratio = last_volume / volume_ma
             volume_signal = "COMPRA" if volume_ratio > 1.5 and last_price > data['prices']['price'].iloc[-2] else "VENDA" if volume_ratio > 1.5 and last_price < data['prices']['price'].iloc[-2] else "NEUTRO"
-            signals.append(("Volume (20MA)", volume_signal, f"{volume_ratio:.1f}x"))
+            signals.append(("Volume (20MA)", volume_signal, f"{volume_ratio:.1f}x", INDICATOR_WEIGHTS['volume']))
         
         if 'OBV' in data['prices'].columns:
             obv_ma = data['prices']['OBV'].rolling(20).mean().iloc[-1]
             last_obv = data['prices']['OBV'].iloc[-1]
             obv_signal = "COMPRA" if last_obv > obv_ma and last_price > data['prices']['price'].iloc[-2] else "VENDA" if last_obv < obv_ma and last_price < data['prices']['price'].iloc[-2] else "NEUTRO"
-            signals.append(("OBV (20MA)", obv_signal, f"{last_obv/1e6:.1f}M"))
+            signals.append(("OBV (20MA)", obv_signal, f"{last_obv/1e6:.1f}M", INDICATOR_WEIGHTS['obv']))
         
         if 'Stoch_K' in data['prices'].columns and 'Stoch_D' in data['prices'].columns:
             stoch_k = data['prices']['Stoch_K'].iloc[-1]
             stoch_d = data['prices']['Stoch_D'].iloc[-1]
             stoch_signal = "COMPRA" if stoch_k < 20 and stoch_d < 20 else "VENDA" if stoch_k > 80 and stoch_d > 80 else "NEUTRO"
-            signals.append(("Stochastic (14,3)", stoch_signal, f"K:{stoch_k:.1f}, D:{stoch_d:.1f}"))
+            signals.append(("Stochastic (14,3)", stoch_signal, f"K:{stoch_k:.1f}, D:{stoch_d:.1f}", INDICATOR_WEIGHTS['stochastic']))
         
         # Adicionar apenas o sinal do Gaussian Process
         if 'GP_Prediction' in data['prices'].columns and not data['prices']['GP_Prediction'].isna().all():
             gp_pred = data['prices']['GP_Prediction'].iloc[-1]
             gp_signal = "COMPRA" if gp_pred > last_price * 1.03 else "VENDA" if gp_pred < last_price * 0.97 else "NEUTRO"
-            signals.append(("Gaussian Process", gp_signal, f"Previsão: ${gp_pred:,.0f}"))
+            signals.append(("Gaussian Process", gp_signal, f"Previsão: ${gp_pred:,.0f}", INDICATOR_WEIGHTS['gaussian_process']))
         
         # Adicionar sinais de Order Blocks
         if 'prices' in data and not data['prices'].empty:
@@ -908,32 +998,44 @@ def generate_signals(data, rsi_window=14, bb_window=20):
                 if not block['broken']:
                     if block['type'] == 'bullish_ob':
                         if last_price >= block['low'] and last_price <= block['high']:
-                            signals.append((f"Order Block (Compra)", "COMPRA", f"Zona: ${block['low']:,.0f}-${block['high']:,.0f}"))
+                            signals.append((f"Order Block (Compra)", "COMPRA", f"Zona: ${block['low']:,.0f}-${block['high']:,.0f}", block['weight']))
                     elif block['type'] == 'bearish_ob':
                         if last_price >= block['low'] and last_price <= block['high']:
-                            signals.append((f"Order Block (Venda)", "VENDA", f"Zona: ${block['low']:,.0f}-${block['high']:,.0f}"))
+                            signals.append((f"Order Block (Venda)", "VENDA", f"Zona: ${block['low']:,.0f}-${block['high']:,.0f}", block['weight']))
                 else:
                     if block['breaker_type'] == 'bullish_breaker':
                         if last_price >= block['low'] * 0.99 and last_price <= block['high'] * 1.01:
-                            signals.append((f"Breaker Block (Resistência)", "VENDA", f"Zona: ${block['low']:,.0f}-${block['high']:,.0f}"))
+                            signals.append((f"Breaker Block (Resistência)", "VENDA", f"Zona: ${block['low']:,.0f}-${block['high']:,.0f}", block['weight']))
                     elif block['breaker_type'] == 'bearish_breaker':
                         if last_price >= block['low'] * 0.99 and last_price <= block['high'] * 1.01:
-                            signals.append((f"Breaker Block (Suporte)", "COMPRA", f"Zona: ${block['low']:,.0f}-${block['high']:,.0f}"))
+                            signals.append((f"Breaker Block (Suporte)", "COMPRA", f"Zona: ${block['low']:,.0f}-${block['high']:,.0f}", block['weight']))
+        
+        # Adicionar detecção de divergências
+        if 'RSI_Divergence' in data['prices'].columns:
+            last_div = data['prices']['RSI_Divergence'].iloc[-1]
+            if last_div == 1:
+                signals.append(("Divergência de Alta (RSI)", "COMPRA", "Preço caindo e RSI subindo", 1.2))
+            elif last_div == -1:
+                signals.append(("Divergência de Baixa (RSI)", "VENDA", "Preço subindo e RSI caindo", 1.2))
     
     except Exception as e:
         st.error(f"Erro ao gerar sinais: {str(e)}")
         return signals, "➖ ERRO NA ANÁLISE", buy_signals, sell_signals
     
+    # Calcular sinais ponderados
+    weighted_buy = sum(s[3] for s in signals if s[1] == "COMPRA")
+    weighted_sell = sum(s[3] for s in signals if s[1] == "VENDA")
+    
     buy_signals = sum(1 for s in signals if s[1] == "COMPRA")
     sell_signals = sum(1 for s in signals if s[1] == "VENDA")
     
-    if buy_signals >= sell_signals + 3:
+    if weighted_buy >= weighted_sell * 1.5:
         final_verdict = "✅ FORTE COMPRA"
-    elif buy_signals > sell_signals:
+    elif weighted_buy > weighted_sell:
         final_verdict = "📈 COMPRA"
-    elif sell_signals >= buy_signals + 3:
+    elif weighted_sell >= weighted_buy * 1.5:
         final_verdict = "❌ FORTE VENDA"
-    elif sell_signals > buy_signals:
+    elif weighted_sell > weighted_buy:
         final_verdict = "📉 VENDA"
     else:
         final_verdict = "➖ NEUTRO"
@@ -956,7 +1058,9 @@ DEFAULT_SETTINGS = {
     'ob_swing_length': 10,
     'ob_show_bull': 3,
     'ob_show_bear': 3,
-    'ob_use_body': True
+    'ob_use_body': True,
+    'min_confidence': 0.7,
+    'n_clusters': 5
 }
 
 if 'user_settings' not in st.session_state:
@@ -1021,10 +1125,25 @@ ob_use_body = st.sidebar.checkbox(
     st.session_state.user_settings['ob_use_body']
 )
 
+st.sidebar.subheader("🔍 Clusterização K-Means")
+
+n_clusters = st.sidebar.slider(
+    "Número de Clusters (S/R)",
+    3, 10,
+    st.session_state.user_settings['n_clusters']
+)
+
 st.sidebar.subheader("🔔 Alertas Automáticos")
 email = st.sidebar.text_input(
     "E-mail para notificações", 
     st.session_state.user_settings['email']
+)
+
+min_confidence = st.sidebar.slider(
+    "Confiança Mínima para Notícias",
+    0.0, 1.0,
+    st.session_state.user_settings['min_confidence'],
+    0.05
 )
 
 col1, col2 = st.sidebar.columns(2)
@@ -1040,7 +1159,9 @@ with col1:
             'ob_swing_length': ob_swing_length,
             'ob_show_bull': ob_show_bull,
             'ob_show_bear': ob_show_bear,
-            'ob_use_body': ob_use_body
+            'ob_use_body': ob_use_body,
+            'min_confidence': min_confidence,
+            'n_clusters': n_clusters
         }
         st.sidebar.success("Configurações salvas com sucesso!")
         
@@ -1061,6 +1182,7 @@ signals, final_verdict, buy_signals, sell_signals = generate_signals(
 
 sentiment = get_market_sentiment()
 traditional_assets = get_traditional_assets()
+filtered_news = filter_news_by_confidence(data.get('news', []), st.session_state.user_settings['min_confidence'])
 
 st.header("📊 Painel Integrado BTC Pro+")
 
@@ -1131,6 +1253,28 @@ with tab1:
             
             fig = plot_order_blocks(fig, blocks, data['prices']['price'].iloc[-1])
             
+            # Adicionar zonas de suporte/resistência
+            if 'support_resistance' in data:
+                for level in data['support_resistance']:
+                    fig.add_hline(y=level, line_dash="dot", 
+                                 line_color="gray", opacity=0.5,
+                                 annotation_text=f"Zona S/R: ${level:,.0f}")
+            
+            # Adicionar divergências RSI
+            if 'RSI_Divergence' in data['prices'].columns:
+                divergences = data['prices'][data['prices']['RSI_Divergence'] != 0]
+                for idx, row in divergences.iterrows():
+                    color = "green" if row['RSI_Divergence'] > 0 else "red"
+                    fig.add_annotation(
+                        x=row['date'],
+                        y=row['price'],
+                        text="🔺" if row['RSI_Divergence'] > 0 else "🔻",
+                        showarrow=True,
+                        arrowhead=1,
+                        bgcolor=color,
+                        opacity=0.8
+                    )
+            
             st.plotly_chart(fig, use_container_width=True)
             
             # Novo gráfico: Hashrate vs Dificuldade
@@ -1158,43 +1302,43 @@ with tab1:
                 for signal in signals:
                     if "MA" in signal[0] or "Preço vs" in signal[0]:
                         color = "🟢" if signal[1] == "COMPRA" else "🔴" if signal[1] == "VENDA" else "🟡"
-                        st.markdown(f"{color} **{signal[0]}**: {signal[1]} ({signal[2]})")
+                        st.markdown(f"{color} **{signal[0]}**: {signal[1]} ({signal[2]}) [Peso: {signal[3]:.1f}]")
                 
                 rsi_signal = next((s for s in signals if "RSI" in s[0]), None)
                 if rsi_signal:
                     rsi_color = "🟢" if rsi_signal[1] == "COMPRA" else "🔴" if rsi_signal[1] == "VENDA" else "🟡"
-                    st.markdown(f"{rsi_color} **{rsi_signal[0]}**: {rsi_signal[1]} ({rsi_signal[2]})")
+                    st.markdown(f"{rsi_color} **{rsi_signal[0]}**: {rsi_signal[1]} ({rsi_signal[2]}) [Peso: {rsi_signal[3]:.1f}]")
                 
                 macd_signal = next((s for s in signals if "MACD" in s[0]), None)
                 if macd_signal:
                     macd_color = "🟢" if macd_signal[1] == "COMPRA" else "🔴"
-                    st.markdown(f"{macd_color} **{macd_signal[0]}**: {macd_signal[1]} ({macd_signal[2]})")
+                    st.markdown(f"{macd_color} **{macd_signal[0]}**: {macd_signal[1]} ({macd_signal[2]}) [Peso: {macd_signal[3]:.1f}]")
                 
                 bb_signal = next((s for s in signals if "Bollinger" in s[0]), None)
                 if bb_signal:
                     bb_color = "🟢" if bb_signal[1] == "COMPRA" else "🔴" if bb_signal[1] == "VENDA" else "🟡"
-                    st.markdown(f"{bb_color} **{bb_signal[0]}**: {bb_signal[1]} ({bb_signal[2]})")
+                    st.markdown(f"{bb_color} **{bb_signal[0]}**: {bb_signal[1]} ({bb_signal[2]}) [Peso: {bb_signal[3]:.1f}]")
                 
                 volume_signal = next((s for s in signals if "Volume" in s[0]), None)
                 if volume_signal:
                     vol_color = "🟢" if volume_signal[1] == "COMPRA" else "🔴" if volume_signal[1] == "VENDA" else "🟡"
-                    st.markdown(f"{vol_color} **{volume_signal[0]}**: {volume_signal[1]} ({volume_signal[2]})")
+                    st.markdown(f"{vol_color} **{volume_signal[0]}**: {volume_signal[1]} ({volume_signal[2]}) [Peso: {volume_signal[3]:.1f}]")
                 
                 obv_signal = next((s for s in signals if "OBV" in s[0]), None)
                 if obv_signal:
                     obv_color = "🟢" if obv_signal[1] == "COMPRA" else "🔴" if obv_signal[1] == "VENDA" else "🟡"
-                    st.markdown(f"{obv_color} **{obv_signal[0]}**: {obv_signal[1]} ({obv_signal[2]})")
+                    st.markdown(f"{obv_color} **{obv_signal[0]}**: {obv_signal[1]} ({obv_signal[2]}) [Peso: {obv_signal[3]:.1f}]")
                 
                 stoch_signal = next((s for s in signals if "Stochastic" in s[0]), None)
                 if stoch_signal:
                     stoch_color = "🟢" if stoch_signal[1] == "COMPRA" else "🔴" if stoch_signal[1] == "VENDA" else "🟡"
-                    st.markdown(f"{stoch_color} **{stoch_signal[0]}**: {stoch_signal[1]} ({stoch_signal[2]})")
+                    st.markdown(f"{stoch_color} **{stoch_signal[0]}**: {stoch_signal[1]} ({stoch_signal[2]}) [Peso: {stoch_signal[3]:.1f}]")
                 
                 # Mostrar apenas o sinal do Gaussian Process
                 gp_signal = next((s for s in signals if "Gaussian Process" in s[0]), None)
                 if gp_signal:
                     gp_color = "🟢" if gp_signal[1] == "COMPRA" else "🔴" if gp_signal[1] == "VENDA" else "🟡"
-                    st.markdown(f"{gp_color} **{gp_signal[0]}**: {gp_signal[1]} ({gp_signal[2]})")
+                    st.markdown(f"{gp_color} **{gp_signal[0]}**: {gp_signal[1]} ({gp_signal[2]}) [Peso: {gp_signal[3]:.1f}]")
                 
                 # Mostrar sinais de Order Blocks
                 ob_signals = [s for s in signals if "Order Block" in s[0] or "Breaker Block" in s[0]]
@@ -1203,7 +1347,13 @@ with tab1:
                         ob_color = "🔵" if ob_signal[1] == "COMPRA" else "🟠"
                     else:
                         ob_color = "🟢" if ob_signal[1] == "COMPRA" else "🔴"
-                    st.markdown(f"{ob_color} **{ob_signal[0]}**: {ob_signal[1]} ({ob_signal[2]})")
+                    st.markdown(f"{ob_color} **{ob_signal[0]}**: {ob_signal[1]} ({ob_signal[2]}) [Peso: {ob_signal[3]:.1f}]")
+                
+                # Mostrar divergências
+                div_signals = [s for s in signals if "Divergência" in s[0]]
+                for div_signal in div_signals:
+                    div_color = "🟢" if div_signal[1] == "COMPRA" else "🔴"
+                    st.markdown(f"{div_color} **{div_signal[0]}**: {div_signal[1]} ({div_signal[2]}) [Peso: {div_signal[3]:.1f}]")
         
         st.divider()
         
@@ -1232,7 +1382,17 @@ with tab1:
         else:
             st.write(f"## {final_verdict}")
         
-        st.caption(f"*Baseado na análise de {len(signals)} indicadores técnicos*")
+        st.caption(f"*Baseado na análise de {len(signals)} indicadores técnicos com pesos dinâmicos*")
+        
+        st.divider()
+        
+        st.subheader("📰 Notícias Filtradas")
+        if filtered_news:
+            for news in filtered_news:
+                st.markdown(f"📌 **{news['title']}**")
+                st.caption(f"Data: {news['date'].strftime('%Y-%m-%d')} | Confiança: {news['confidence']:.0%}")
+        else:
+            st.warning("Nenhuma notícia recente com confiança suficiente")
     
     st.subheader("📈 Sentimento do Mercado")
     fig_sent = go.Figure(go.Indicator(
@@ -1349,51 +1509,60 @@ with tab3:
             st.markdown("""
             - **Compra**: Quando RSI < Zona de Sobrecompra e preço > MA30
             - **Venda**: Quando RSI > Zona de Sobrevenda e preço < MA30
-            """)
+            - **Peso**: {:.1f}x
+            """.format(INDICATOR_WEIGHTS['rsi']))
         elif strategy == "MACD":
             st.markdown("""
             - **Compra Forte**: MACD > 0 e cruzando linha de sinal para cima
             - **Venda Forte**: MACD < 0 e cruzando linha de sinal para baixo
-            """)
+            - **Peso**: {:.1f}x
+            """.format(INDICATOR_WEIGHTS['macd']))
         elif strategy == "Bollinger":
             st.markdown("""
             - **Compra**: Preço toca banda inferior
             - **Venda Parcial**: Preço cruza a média móvel
             - **Venda Total**: Preço toca banda superior
-            """)
+            - **Peso**: {:.1f}x
+            """.format(INDICATOR_WEIGHTS['bollinger']))
         elif strategy == "EMA Cross":
             st.markdown("""
             - **Compra**: EMA curta cruza EMA longa para cima
             - **Venda**: EMA curta cruza EMA longa para baixo
-            """)
+            - **Peso**: {:.1f}x
+            """.format(INDICATOR_WEIGHTS['ma_cross']))
         elif strategy == "Volume":
             st.markdown("""
             - **Compra**: Volume > Média + Limiar e preço subindo
             - **Venda**: Volume > Média + Limiar e preço caindo
-            """)
+            - **Peso**: {:.1f}x
+            """.format(INDICATOR_WEIGHTS['volume']))
         elif strategy == "OBV":
             st.markdown("""
             - **Compra**: OBV > Média e preço subindo
             - **Venda**: OBV < Média e preço caindo
-            """)
+            - **Peso**: {:.1f}x
+            """.format(INDICATOR_WEIGHTS['obv']))
         elif strategy == "Stochastic":
             st.markdown("""
             - **Compra**: %K e %D abaixo da zona de sobrevenda
             - **Venda**: %K e %D acima da zona de sobrecompra
-            """)
+            - **Peso**: {:.1f}x
+            """.format(INDICATOR_WEIGHTS['stochastic']))
         elif strategy == "Gaussian Process":
             st.markdown("""
             - **Compra**: Previsão > Preço Atual + Limiar
             - **Venda**: Previsão < Preço Atual - Limiar
             - Usa regressão não-linear para prever tendências
-            """)
+            - **Peso**: {:.1f}x
+            """.format(INDICATOR_WEIGHTS['gaussian_process']))
         elif strategy == "Order Blocks":
             st.markdown("""
             - **Compra**: Preço retorna a um bloco de compra intacto
             - **Venda**: Preço retorna a um bloco de venda intacto
             - **Compra Contrária**: Preço testa um bearish breaker (suporte)
             - **Venda Contrária**: Preço testa um bullish breaker (resistência)
-            """)
+            - **Peso**: {:.1f}x
+            """.format(INDICATOR_WEIGHTS['order_blocks']))
     
     if df.empty:
         st.error("Não foi possível executar o backtesting. Dados insuficientes.")
@@ -1708,6 +1877,56 @@ with tab5:
         )
         fig_ob = plot_order_blocks(fig_ob, blocks, data['prices']['price'].iloc[-1])
         st.plotly_chart(fig_ob, use_container_width=True)
+        
+        # Gráfico de Suporte/Resistência
+        if 'support_resistance' in data:
+            st.subheader("📊 Zonas de Suporte/Resistência (K-Means)")
+            fig_sr = go.Figure()
+            fig_sr.add_trace(go.Scatter(
+                x=data['prices']['date'],
+                y=data['prices']['price'],
+                name="Preço"
+            ))
+            
+            for level in data['support_resistance']:
+                fig_sr.add_hline(y=level, line_dash="dot", 
+                                line_color="gray", opacity=0.7,
+                                annotation_text=f"${level:,.0f}")
+            
+            fig_sr.update_layout(title=f"Zonas de Suporte/Resistência ({len(data['support_resistance']} clusters)")
+            st.plotly_chart(fig_sr, use_container_width=True)
+        
+        # Gráfico de Divergências RSI
+        if 'RSI_Divergence' in data['prices'].columns:
+            st.subheader("📊 Divergências RSI")
+            fig_div = go.Figure()
+            fig_div.add_trace(go.Scatter(
+                x=data['prices']['date'],
+                y=data['prices']['price'],
+                name="Preço"
+            ))
+            
+            bullish_div = data['prices'][data['prices']['RSI_Divergence'] == 1]
+            bearish_div = data['prices'][data['prices']['RSI_Divergence'] == -1]
+            
+            fig_div.add_trace(go.Scatter(
+                x=bullish_div['date'],
+                y=bullish_div['price'],
+                mode='markers',
+                marker=dict(color='green', size=10),
+                name="Divergência de Alta"
+            ))
+            
+            fig_div.add_trace(go.Scatter(
+                x=bearish_div['date'],
+                y=bearish_div['price'],
+                mode='markers',
+                marker=dict(color='red', size=10),
+                name="Divergência de Baixa"
+            ))
+            
+            fig_div.update_layout(title="Divergências RSI (Preço vs Indicador)")
+            st.plotly_chart(fig_div, use_container_width=True)
 
 with tab6:
     st.subheader("📤 Exportar Dados Completo")
@@ -1722,12 +1941,16 @@ with tab6:
         pdf.set_font("Arial", size=12)
         
         # Adicionar conteúdo com texto limpo
+        pdf.cell(200, 10, txt="BTC Super Dashboard Pro+ - Relatório Completo", ln=1, align='C')
+        pdf.ln(10)
+        
         if 'prices' in data and not data['prices'].empty:
             pdf.cell(200, 10, txt=f"Preço Atual: ${data['prices']['price'].iloc[-1]:,.2f}", ln=1)
         
         clean_verdict = clean_text(final_verdict)
         pdf.cell(200, 10, txt=f"Sinal Atual: {clean_verdict}", ln=1)
         
+        pdf.ln(5)
         pdf.cell(200, 10, txt="Configurações:", ln=1)
         pdf.cell(200, 10, txt=f"- Período RSI: {st.session_state.user_settings['rsi_window']}", ln=1)
         pdf.cell(200, 10, txt=f"- BB Window: {st.session_state.user_settings['bb_window']}", ln=1)
@@ -1736,13 +1959,36 @@ with tab6:
         pdf.cell(200, 10, txt=f"- Order Blocks Bullish: {st.session_state.user_settings['ob_show_bull']}", ln=1)
         pdf.cell(200, 10, txt=f"- Order Blocks Bearish: {st.session_state.user_settings['ob_show_bear']}", ln=1)
         pdf.cell(200, 10, txt=f"- Usar Corpo Candle: {'Sim' if st.session_state.user_settings['ob_use_body'] else 'Não'}", ln=1)
+        pdf.cell(200, 10, txt=f"- Número de Clusters (S/R): {st.session_state.user_settings['n_clusters']}", ln=1)
+        pdf.cell(200, 10, txt=f"- Confiança Mínima Notícias: {st.session_state.user_settings['min_confidence']:.0%}", ln=1)
         
+        pdf.ln(5)
         pdf.cell(200, 10, txt="Sinais Técnicos:", ln=1)
         for signal in signals:
             clean_name = clean_text(signal[0])
             clean_value = clean_text(signal[1])
             clean_detail = clean_text(signal[2])
-            pdf.cell(200, 10, txt=f"- {clean_name}: {clean_value} ({clean_detail})", ln=1)
+            pdf.cell(200, 10, txt=f"- {clean_name}: {clean_value} ({clean_detail}) [Peso: {signal[3]:.1f}]", ln=1)
+        
+        pdf.ln(5)
+        pdf.cell(200, 10, txt="Zonas de Suporte/Resistência:", ln=1)
+        if 'support_resistance' in data:
+            for i, level in enumerate(data['support_resistance'], 1):
+                pdf.cell(200, 10, txt=f"Zona {i}: ${level:,.0f}", ln=1)
+        else:
+            pdf.cell(200, 10, txt="Nenhuma zona identificada", ln=1)
+        
+        pdf.ln(5)
+        pdf.cell(200, 10, txt="Notícias Relevantes:", ln=1)
+        if filtered_news:
+            for news in filtered_news:
+                clean_title = clean_text(news['title'])
+                pdf.cell(200, 10, txt=f"- {clean_title} (Confiança: {news['confidence']:.0%})", ln=1)
+        else:
+            pdf.cell(200, 10, txt="Nenhuma notícia recente com confiança suficiente", ln=1)
+        
+        # Adicionar gráficos como imagens (opcional)
+        # Aqui você poderia adicionar screenshots dos gráficos se necessário
         
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             pdf.output(tmp.name)
@@ -1772,6 +2018,19 @@ with tab6:
                     blocks_df = pd.DataFrame(blocks)
                     if not blocks_df.empty:
                         blocks_df.to_excel(writer, sheet_name="Order Blocks")
+                
+                # Adicionar zonas de suporte/resistência
+                if 'support_resistance' in data:
+                    sr_df = pd.DataFrame({
+                        'Zona': [f"Zona {i}" for i in range(1, len(data['support_resistance'])+1)],
+                        'Preço': data['support_resistance']
+                    })
+                    sr_df.to_excel(writer, sheet_name="Support Resistance")
+                
+                # Adicionar notícias filtradas
+                if filtered_news:
+                    news_df = pd.DataFrame(filtered_news)
+                    news_df.to_excel(writer, sheet_name="News")
             
             st.success(f"Dados exportados! [Download aqui]({tmp.name})")
 
@@ -1780,12 +2039,14 @@ st.sidebar.markdown("""
 - 🟢 **COMPRA**: Indicador positivo
 - 🔴 **VENDA**: Indicador negativo
 - 🟡 **NEUTRO**: Sem sinal claro
-- ✅ **FORTE COMPRA**: 3+ sinais de diferença
-- ❌ **FORTE VENDA**: 3+ sinais de diferença
+- ✅ **FORTE COMPRA**: 1.5x mais sinais ponderados
+- ❌ **FORTE VENDA**: 1.5x mais sinais ponderados
 - 🔵 **ORDER BLOCK (COMPRA)**: Zona de interesse para compra
 - 🟠 **ORDER BLOCK (VENDA)**: Zona de interesse para venda
 - 🟢 **BREAKER BLOCK (SUPORTE)**: Zona de suporte após rompimento
 - 🔴 **BREAKER BLOCK (RESISTÊNCIA)**: Zona de resistência após rompimento
+- 🔺 **DIVERGÊNCIA DE ALTA**: Preço caindo e RSI subindo
+- 🔻 **DIVERGÊNCIA DE BAIXA**: Preço subindo e RSI caindo
 
 **📊 Indicadores:**
 1. Médias Móveis (7, 30, 200 dias)
@@ -1797,9 +2058,12 @@ st.sidebar.markdown("""
 7. Stochastic (sobrecompra/sobrevenda)
 8. Regressão de Processo Gaussiano (previsão)
 9. Order Blocks & Breaker Blocks (LuxAlgo)
-10. Fluxo de Exchanges
-11. Hashrate vs Dificuldade
-12. Atividade de Whales
-13. Análise Sentimental
-14. Comparação com Mercado Tradicional
+10. Zonas de Suporte/Resistência (K-Means)
+11. Divergências RSI
+12. Fluxo de Exchanges
+13. Hashrate vs Dificuldade
+14. Atividade de Whales
+15. Análise Sentimental
+16. Comparação com Mercado Tradicional
+17. Filtro de Notícias por Confiança
 """)
