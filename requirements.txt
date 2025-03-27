@@ -15,3 +15,4 @@ stable-baselines3>=2.0.0
 gym>=0.26.0
 torch>=2.0.0
 sentencepiece!=0.1.92 
+tf-keras==2.12.0
