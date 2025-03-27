@@ -10,3 +10,4 @@ matplotlib>=3.7.0
 textblob
 vaderSentiment
 transformers
+tensorflow>=2.0.0
