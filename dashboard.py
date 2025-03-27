@@ -1893,7 +1893,7 @@ with tab5:
                                 line_color="gray", opacity=0.7,
                                 annotation_text=f"${level:,.0f}")
             
-            fig_sr.update_layout(title=f"Zonas de Suporte/Resistência ({len(data['support_resistance']} clusters)")
+            fig_sr.update_layout(title=f"Zonas de Suporte/Resistência ({len(data['support_resistance'])} clusters)")
             st.plotly_chart(fig_sr, use_container_width=True)
         
         # Gráfico de Divergências RSI
