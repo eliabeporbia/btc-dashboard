@@ -150,7 +150,7 @@ class BitcoinTradingEnv(gym.Env):
         profit = self.total_profit
         print(f'Step: {self.current_step}, Profit: {profit}')
 
-@st.cache_resource
+@st.cache_data(allow_output_mutation=True)  # <<< ADICIONE ESTA LINHA
 def load_sentiment_model():
     """Carrega o modelo de análise de sentimentos"""
     return pipeline("sentiment-analysis", model="finiteautomata/bertweet-base-sentiment-analysis")
