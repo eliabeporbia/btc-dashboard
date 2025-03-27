@@ -115,6 +115,170 @@ def calculate_gaussian_process(price_series, window=30, lookahead=5):
     
     return pd.Series(predictions[:len(price_series)], index=price_series.index)
 
+def identify_order_blocks(df, swing_length=10, show_bull=3, show_bear=3, use_body=True):
+    """
+    Identifica Order Blocks e Breaker Blocks no estilo LuxAlgo
+    
+    Parâmetros:
+    - df: DataFrame com colunas 'price' (ou 'close'), 'high', 'low', 'open', 'close'
+    - swing_length: janela para identificar swings
+    - show_bull: número de blocos bullish para mostrar
+    - show_bear: número de blocos bearish para mostrar
+    - use_body: se True, usa corpo do candle (open/close) em vez de high/low
+    
+    Retorna:
+    - DataFrame com colunas adicionais para os blocos identificados
+    - Lista de dicionários com informações dos blocos
+    """
+    if df.empty:
+        return df, []
+    
+    df = df.copy()
+    df['date'] = pd.to_datetime(df['date'])
+    
+    # Identificar swings highs e lows
+    if use_body:
+        df['swing_high'] = df['close'].rolling(swing_length, center=True).max()
+        df['swing_low'] = df['close'].rolling(swing_length, center=True).min()
+    else:
+        df['swing_high'] = df['high'].rolling(swing_length, center=True).max()
+        df['swing_low'] = df['low'].rolling(swing_length, center=True).min()
+    
+    # Identificar Order Blocks
+    blocks = []
+    
+    # Bullish Order Blocks (compra)
+    bullish_blocks = df[df['close'] == df['swing_high']].copy()
+    bullish_blocks = bullish_blocks.sort_values('date', ascending=False).head(show_bull)
+    
+    for idx, row in bullish_blocks.iterrows():
+        block_start = row['date'] - pd.Timedelta(days=swing_length//2)
+        block_end = row['date'] + pd.Timedelta(days=swing_length//2)
+        
+        block_df = df[(df['date'] >= block_start) & (df['date'] <= block_end)]
+        
+        if not block_df.empty:
+            high = block_df['high'].max() if not use_body else block_df['close'].max()
+            low = block_df['low'].min() if not use_body else block_df['close'].min()
+            
+            blocks.append({
+                'type': 'bullish_ob',
+                'start_date': block_start,
+                'end_date': block_end,
+                'high': high,
+                'low': low,
+                'trigger_price': row['close'],
+                'broken': False
+            })
+    
+    # Bearish Order Blocks (venda)
+    bearish_blocks = df[df['close'] == df['swing_low']].copy()
+    bearish_blocks = bearish_blocks.sort_values('date', ascending=False).head(show_bear)
+    
+    for idx, row in bearish_blocks.iterrows():
+        block_start = row['date'] - pd.Timedelta(days=swing_length//2)
+        block_end = row['date'] + pd.Timedelta(days=swing_length//2)
+        
+        block_df = df[(df['date'] >= block_start) & (df['date'] <= block_end)]
+        
+        if not block_df.empty:
+            high = block_df['high'].max() if not use_body else block_df['close'].max()
+            low = block_df['low'].min() if not use_body else block_df['close'].min()
+            
+            blocks.append({
+                'type': 'bearish_ob',
+                'start_date': block_start,
+                'end_date': block_end,
+                'high': high,
+                'low': low,
+                'trigger_price': row['close'],
+                'broken': False
+            })
+    
+    # Verificar Breaker Blocks
+    for block in blocks:
+        if block['type'] == 'bullish_ob':
+            # Verificar se o preço fechou abaixo do bloco (tornando-se um breaker)
+            subsequent_data = df[df['date'] > block['end_date']]
+            if not subsequent_data.empty:
+                if subsequent_data['close'].min() < block['low']:
+                    block['broken'] = True
+                    block['breaker_type'] = 'bullish_breaker'
+        
+        elif block['type'] == 'bearish_ob':
+            # Verificar se o preço fechou acima do bloco (tornando-se um breaker)
+            subsequent_data = df[df['date'] > block['end_date']]
+            if not subsequent_data.empty:
+                if subsequent_data['close'].max() > block['high']:
+                    block['broken'] = True
+                    block['breaker_type'] = 'bearish_breaker'
+    
+    return df, blocks
+
+def plot_order_blocks(fig, blocks, current_price):
+    """Adiciona Order Blocks e Breaker Blocks ao gráfico Plotly"""
+    for block in blocks:
+        if block['type'] == 'bullish_ob' and not block['broken']:
+            # Bloco de compra intacto (azul)
+            fig.add_shape(type="rect",
+                         x0=block['start_date'], y0=block['low'],
+                         x1=block['end_date'], y1=block['high'],
+                         line=dict(color="blue", width=0),
+                         fillcolor="rgba(0, 0, 255, 0.2)",
+                         layer="below")
+            
+            # Linha de gatilho
+            fig.add_shape(type="line",
+                         x0=block['start_date'], y0=block['trigger_price'],
+                         x1=block['end_date'], y1=block['trigger_price'],
+                         line=dict(color="blue", width=1, dash="dot"))
+            
+        elif block['type'] == 'bearish_ob' and not block['broken']:
+            # Bloco de venda intacto (laranja)
+            fig.add_shape(type="rect",
+                         x0=block['start_date'], y0=block['low'],
+                         x1=block['end_date'], y1=block['high'],
+                         line=dict(color="orange", width=0),
+                         fillcolor="rgba(255, 165, 0, 0.2)",
+                         layer="below")
+            
+            # Linha de gatilho
+            fig.add_shape(type="line",
+                         x0=block['start_date'], y0=block['trigger_price'],
+                         x1=block['end_date'], y1=block['trigger_price'],
+                         line=dict(color="orange", width=1, dash="dot"))
+            
+        elif 'breaker_type' in block:
+            if block['breaker_type'] == 'bullish_breaker':
+                # Bloco de compra quebrado (vermelho)
+                fig.add_shape(type="rect",
+                             x0=block['start_date'], y0=block['low'],
+                             x1=block['end_date'], y1=block['high'],
+                             line=dict(color="red", width=1),
+                             fillcolor="rgba(255, 0, 0, 0.1)")
+                
+                # Linha de gatilho
+                fig.add_shape(type="line",
+                             x0=block['start_date'], y0=block['trigger_price'],
+                             x1=block['end_date'], y1=block['trigger_price'],
+                             line=dict(color="red", width=1, dash="dot"))
+                
+            elif block['breaker_type'] == 'bearish_breaker':
+                # Bloco de venda quebrado (verde)
+                fig.add_shape(type="rect",
+                             x0=block['start_date'], y0=block['low'],
+                             x1=block['end_date'], y1=block['high'],
+                             line=dict(color="green", width=1),
+                             fillcolor="rgba(0, 255, 0, 0.1)")
+                
+                # Linha de gatilho
+                fig.add_shape(type="line",
+                             x0=block['start_date'], y0=block['trigger_price'],
+                             x1=block['end_date'], y1=block['trigger_price'],
+                             line=dict(color="green", width=1, dash="dot"))
+    
+    return fig
+
 def get_exchange_flows():
     """Retorna dados simulados de fluxo de exchanges"""
     exchanges = ["Binance", "Coinbase", "Kraken", "FTX", "Bitfinex"]
@@ -411,6 +575,50 @@ def backtest_gp_strategy(df, window=30, lookahead=5, threshold=0.03):
     df = calculate_daily_returns(df)
     return calculate_strategy_returns(df)
 
+def backtest_order_block_strategy(df, swing_length=10, use_body=True):
+    """Estratégia baseada em Order Blocks"""
+    if df.empty or 'price' not in df.columns:
+        return pd.DataFrame()
+    
+    df = df.copy()
+    df, blocks = identify_order_blocks(df, swing_length=swing_length, use_body=use_body)
+    
+    df['signal'] = 0
+    
+    for block in blocks:
+        if not block['broken']:
+            if block['type'] == 'bullish_ob':
+                # Sinal de compra quando o preço retorna ao bloco de compra
+                mask = (df['date'] > block['end_date']) & \
+                       (df['price'] >= block['low']) & \
+                       (df['price'] <= block['high'])
+                df.loc[mask, 'signal'] = 1
+                
+            elif block['type'] == 'bearish_ob':
+                # Sinal de venda quando o preço retorna ao bloco de venda
+                mask = (df['date'] > block['end_date']) & \
+                       (df['price'] >= block['low']) & \
+                       (df['price'] <= block['high'])
+                df.loc[mask, 'signal'] = -1
+        
+        else:
+            if block['breaker_type'] == 'bullish_breaker':
+                # Sinal de venda quando o preço testa um bullish breaker (resistência)
+                mask = (df['date'] > block['end_date']) & \
+                       (df['price'] >= block['low'] * 0.99) & \
+                       (df['price'] <= block['high'] * 1.01)
+                df.loc[mask, 'signal'] = -1
+                
+            elif block['breaker_type'] == 'bearish_breaker':
+                # Sinal de compra quando o preço testa um bearish breaker (suporte)
+                mask = (df['date'] > block['end_date']) & \
+                       (df['price'] >= block['low'] * 0.99) & \
+                       (df['price'] <= block['high'] * 1.01)
+                df.loc[mask, 'signal'] = 1
+    
+    df = calculate_daily_returns(df)
+    return calculate_strategy_returns(df)
+
 def calculate_metrics(df):
     """Calcula métricas de performance com tratamento robusto"""
     metrics = {}
@@ -479,6 +687,8 @@ def optimize_strategy_parameters(data, strategy_name, param_space):
                 df = backtest_stochastic_strategy(data['prices'], **params)
             elif strategy_name == 'Gaussian Process':
                 df = backtest_gp_strategy(data['prices'], **params)
+            elif strategy_name == 'Order Blocks':
+                df = backtest_order_block_strategy(data['prices'], **params)
             else:
                 continue
                 
@@ -521,6 +731,10 @@ def load_data():
         
         data['prices'] = pd.DataFrame(market_data["prices"], columns=["timestamp", "price"])
         data['prices']["date"] = pd.to_datetime(data['prices']["timestamp"], unit="ms")
+        data['prices']['close'] = data['prices']['price']  # Para compatibilidade com Order Blocks
+        data['prices']['high'] = data['prices']['price'] * 1.01  # Simulando high/low
+        data['prices']['low'] = data['prices']['price'] * 0.99
+        data['prices']['open'] = data['prices']['price'] * 1.005
         
         data['prices']['volume'] = np.random.randint(10000, 50000, size=len(data['prices']))
         
@@ -679,6 +893,32 @@ def generate_signals(data, rsi_window=14, bb_window=20):
             gp_pred = data['prices']['GP_Prediction'].iloc[-1]
             gp_signal = "COMPRA" if gp_pred > last_price * 1.03 else "VENDA" if gp_pred < last_price * 0.97 else "NEUTRO"
             signals.append(("Gaussian Process", gp_signal, f"Previsão: ${gp_pred:,.0f}"))
+        
+        # Adicionar sinais de Order Blocks
+        if 'prices' in data and not data['prices'].empty:
+            _, blocks = identify_order_blocks(
+                data['prices'],
+                swing_length=st.session_state.user_settings['ob_swing_length'],
+                show_bull=st.session_state.user_settings['ob_show_bull'],
+                show_bear=st.session_state.user_settings['ob_show_bear'],
+                use_body=st.session_state.user_settings['ob_use_body']
+            )
+            
+            for block in blocks:
+                if not block['broken']:
+                    if block['type'] == 'bullish_ob':
+                        if last_price >= block['low'] and last_price <= block['high']:
+                            signals.append((f"Order Block (Compra)", "COMPRA", f"Zona: ${block['low']:,.0f}-${block['high']:,.0f}"))
+                    elif block['type'] == 'bearish_ob':
+                        if last_price >= block['low'] and last_price <= block['high']:
+                            signals.append((f"Order Block (Venda)", "VENDA", f"Zona: ${block['low']:,.0f}-${block['high']:,.0f}"))
+                else:
+                    if block['breaker_type'] == 'bullish_breaker':
+                        if last_price >= block['low'] * 0.99 and last_price <= block['high'] * 1.01:
+                            signals.append((f"Breaker Block (Resistência)", "VENDA", f"Zona: ${block['low']:,.0f}-${block['high']:,.0f}"))
+                    elif block['breaker_type'] == 'bearish_breaker':
+                        if last_price >= block['low'] * 0.99 and last_price <= block['high'] * 1.01:
+                            signals.append((f"Breaker Block (Suporte)", "COMPRA", f"Zona: ${block['low']:,.0f}-${block['high']:,.0f}"))
     
     except Exception as e:
         st.error(f"Erro ao gerar sinais: {str(e)}")
@@ -712,7 +952,11 @@ DEFAULT_SETTINGS = {
     'ma_windows': [7, 30, 200],
     'email': '',
     'gp_window': 30,
-    'gp_lookahead': 5
+    'gp_lookahead': 5,
+    'ob_swing_length': 10,
+    'ob_show_bull': 3,
+    'ob_show_bear': 3,
+    'ob_use_body': True
 }
 
 if 'user_settings' not in st.session_state:
@@ -752,6 +996,31 @@ gp_lookahead = st.sidebar.slider(
     st.session_state.user_settings['gp_lookahead']
 )
 
+st.sidebar.subheader("📊 Order Blocks (LuxAlgo)")
+
+ob_swing_length = st.sidebar.slider(
+    "Swing Lookback (Order Blocks)",
+    5, 20,
+    st.session_state.user_settings['ob_swing_length']
+)
+
+ob_show_bull = st.sidebar.slider(
+    "Mostrar últimos Bullish OBs",
+    1, 5,
+    st.session_state.user_settings['ob_show_bull']
+)
+
+ob_show_bear = st.sidebar.slider(
+    "Mostrar últimos Bearish OBs",
+    1, 5,
+    st.session_state.user_settings['ob_show_bear']
+)
+
+ob_use_body = st.sidebar.checkbox(
+    "Usar corpo do candle (Order Blocks)",
+    st.session_state.user_settings['ob_use_body']
+)
+
 st.sidebar.subheader("🔔 Alertas Automáticos")
 email = st.sidebar.text_input(
     "E-mail para notificações", 
@@ -767,7 +1036,11 @@ with col1:
             'ma_windows': ma_windows,
             'email': email,
             'gp_window': gp_window,
-            'gp_lookahead': gp_lookahead
+            'gp_lookahead': gp_lookahead,
+            'ob_swing_length': ob_swing_length,
+            'ob_show_bull': ob_show_bull,
+            'ob_show_bear': ob_show_bear,
+            'ob_use_body': ob_use_body
         }
         st.sidebar.success("Configurações salvas com sucesso!")
         
@@ -842,8 +1115,22 @@ with tab1:
         if 'prices' in data and not data['prices'].empty:
             ma_cols = ['price'] + [f'MA{window}' for window in st.session_state.user_settings['ma_windows'] 
                                  if f'MA{window}' in data['prices'].columns]
+            
+            # Criar figura com Order Blocks
             fig = px.line(data['prices'], x="date", y=ma_cols, 
-                         title="Preço BTC e Médias Móveis")
+                         title="Preço BTC e Médias Móveis com Order Blocks")
+            
+            # Adicionar Order Blocks ao gráfico
+            _, blocks = identify_order_blocks(
+                data['prices'],
+                swing_length=st.session_state.user_settings['ob_swing_length'],
+                show_bull=st.session_state.user_settings['ob_show_bull'],
+                show_bear=st.session_state.user_settings['ob_show_bear'],
+                use_body=st.session_state.user_settings['ob_use_body']
+            )
+            
+            fig = plot_order_blocks(fig, blocks, data['prices']['price'].iloc[-1])
+            
             st.plotly_chart(fig, use_container_width=True)
             
             # Novo gráfico: Hashrate vs Dificuldade
@@ -908,6 +1195,15 @@ with tab1:
                 if gp_signal:
                     gp_color = "🟢" if gp_signal[1] == "COMPRA" else "🔴" if gp_signal[1] == "VENDA" else "🟡"
                     st.markdown(f"{gp_color} **{gp_signal[0]}**: {gp_signal[1]} ({gp_signal[2]})")
+                
+                # Mostrar sinais de Order Blocks
+                ob_signals = [s for s in signals if "Order Block" in s[0] or "Breaker Block" in s[0]]
+                for ob_signal in ob_signals:
+                    if "Order Block" in ob_signal[0]:
+                        ob_color = "🔵" if ob_signal[1] == "COMPRA" else "🟠"
+                    else:
+                        ob_color = "🟢" if ob_signal[1] == "COMPRA" else "🔴"
+                    st.markdown(f"{ob_color} **{ob_signal[0]}**: {ob_signal[1]} ({ob_signal[2]})")
         
         st.divider()
         
@@ -981,7 +1277,7 @@ with tab3:
     
     strategy = st.selectbox(
         "Escolha sua Estratégia:",
-        ["RSI", "MACD", "Bollinger", "EMA Cross", "Volume", "OBV", "Stochastic", "Gaussian Process"],
+        ["RSI", "MACD", "Bollinger", "EMA Cross", "Volume", "OBV", "Stochastic", "Gaussian Process", "Order Blocks"],
         key="backtest_strategy"
     )
     
@@ -1038,6 +1334,11 @@ with tab3:
                 threshold = st.slider("Limiar de Sinal (%)", 1.0, 10.0, 3.0, 0.5)
                 df = backtest_gp_strategy(data['prices'], window, lookahead, threshold/100)
                 
+            elif strategy == "Order Blocks":
+                swing_length = st.slider("Swing Lookback", 5, 20, st.session_state.user_settings['ob_swing_length'])
+                use_body = st.checkbox("Usar corpo do candle", st.session_state.user_settings['ob_use_body'])
+                df = backtest_order_block_strategy(data['prices'], swing_length, use_body)
+                
         except Exception as e:
             st.error(f"Erro ao configurar estratégia: {str(e)}")
             st.stop()
@@ -1086,6 +1387,13 @@ with tab3:
             - **Venda**: Previsão < Preço Atual - Limiar
             - Usa regressão não-linear para prever tendências
             """)
+        elif strategy == "Order Blocks":
+            st.markdown("""
+            - **Compra**: Preço retorna a um bloco de compra intacto
+            - **Venda**: Preço retorna a um bloco de venda intacto
+            - **Compra Contrária**: Preço testa um bearish breaker (suporte)
+            - **Venda Contrária**: Preço testa um bullish breaker (resistência)
+            """)
     
     if df.empty:
         st.error("Não foi possível executar o backtesting. Dados insuficientes.")
@@ -1110,6 +1418,18 @@ with tab3:
         name="Buy & Hold",
         line=dict(color='blue', width=2)
     ))
+    
+    # Adicionar Order Blocks ao gráfico de backtesting se for a estratégia
+    if strategy == "Order Blocks":
+        _, blocks = identify_order_blocks(
+            df,
+            swing_length=st.session_state.user_settings['ob_swing_length'],
+            show_bull=st.session_state.user_settings['ob_show_bull'],
+            show_bear=st.session_state.user_settings['ob_show_bear'],
+            use_body=st.session_state.user_settings['ob_use_body']
+        )
+        fig = plot_order_blocks(fig, blocks, df['price'].iloc[-1])
+    
     fig.update_layout(
         title="Desempenho Comparativo",
         yaxis_title="Retorno Acumulado",
@@ -1186,6 +1506,11 @@ with tab3:
                     'lookahead': range(3, 8),
                     'threshold': [0.02, 0.03, 0.04, 0.05]
                 }
+            elif strategy == "Order Blocks":
+                param_space = {
+                    'swing_length': range(5, 16),
+                    'use_body': [True, False]
+                }
             
             best_params, best_sharpe, best_df = optimize_strategy_parameters(
                 data, strategy, param_space)
@@ -1202,6 +1527,9 @@ with tab3:
                     elif strategy == "Gaussian Process":
                         st.session_state.user_settings['gp_window'] = best_params['window']
                         st.session_state.user_settings['gp_lookahead'] = best_params['lookahead']
+                    elif strategy == "Order Blocks":
+                        st.session_state.user_settings['ob_swing_length'] = best_params['swing_length']
+                        st.session_state.user_settings['ob_use_body'] = best_params['use_body']
                     st.rerun()
             else:
                 st.warning("Não foi possível encontrar parâmetros otimizados")
@@ -1234,6 +1562,17 @@ with tab4:
                     y=simulated_prices,
                     name=f"Projeção: {event}"
                 ))
+                
+                # Adicionar Order Blocks ao gráfico de cenários
+                _, blocks = identify_order_blocks(
+                    data['prices'].tail(90),
+                    swing_length=st.session_state.user_settings['ob_swing_length'],
+                    show_bull=st.session_state.user_settings['ob_show_bull'],
+                    show_bear=st.session_state.user_settings['ob_show_bear'],
+                    use_body=st.session_state.user_settings['ob_use_body']
+                )
+                fig_scenario = plot_order_blocks(fig_scenario, blocks, data['prices']['price'].iloc[-1])
+                
                 st.plotly_chart(fig_scenario, use_container_width=True)
                 
         except Exception as e:
@@ -1356,6 +1695,19 @@ with tab5:
             ))
             fig_gp.update_layout(title="Regressão de Processo Gaussiano (Previsão)")
             st.plotly_chart(fig_gp, use_container_width=True)
+        
+        # Gráfico de Order Blocks
+        st.subheader("📊 Order Blocks & Breaker Blocks")
+        fig_ob = px.line(data['prices'], x="date", y="price", title="Order Blocks")
+        _, blocks = identify_order_blocks(
+            data['prices'],
+            swing_length=st.session_state.user_settings['ob_swing_length'],
+            show_bull=st.session_state.user_settings['ob_show_bull'],
+            show_bear=st.session_state.user_settings['ob_show_bear'],
+            use_body=st.session_state.user_settings['ob_use_body']
+        )
+        fig_ob = plot_order_blocks(fig_ob, blocks, data['prices']['price'].iloc[-1])
+        st.plotly_chart(fig_ob, use_container_width=True)
 
 with tab6:
     st.subheader("📤 Exportar Dados Completo")
@@ -1380,6 +1732,10 @@ with tab6:
         pdf.cell(200, 10, txt=f"- Período RSI: {st.session_state.user_settings['rsi_window']}", ln=1)
         pdf.cell(200, 10, txt=f"- BB Window: {st.session_state.user_settings['bb_window']}", ln=1)
         pdf.cell(200, 10, txt=f"- Médias Móveis: {', '.join(map(str, st.session_state.user_settings['ma_windows']))}", ln=1)
+        pdf.cell(200, 10, txt=f"- Order Blocks Swing: {st.session_state.user_settings['ob_swing_length']}", ln=1)
+        pdf.cell(200, 10, txt=f"- Order Blocks Bullish: {st.session_state.user_settings['ob_show_bull']}", ln=1)
+        pdf.cell(200, 10, txt=f"- Order Blocks Bearish: {st.session_state.user_settings['ob_show_bear']}", ln=1)
+        pdf.cell(200, 10, txt=f"- Usar Corpo Candle: {'Sim' if st.session_state.user_settings['ob_use_body'] else 'Não'}", ln=1)
         
         pdf.cell(200, 10, txt="Sinais Técnicos:", ln=1)
         for signal in signals:
@@ -1403,6 +1759,20 @@ with tab6:
                     data['hashrate'].to_excel(writer, sheet_name="Hashrate")
                 if 'difficulty' in data and not data['difficulty'].empty:
                     data['difficulty'].to_excel(writer, sheet_name="Difficulty")
+                
+                # Adicionar Order Blocks ao Excel
+                if 'prices' in data and not data['prices'].empty:
+                    _, blocks = identify_order_blocks(
+                        data['prices'],
+                        swing_length=st.session_state.user_settings['ob_swing_length'],
+                        show_bull=st.session_state.user_settings['ob_show_bull'],
+                        show_bear=st.session_state.user_settings['ob_show_bear'],
+                        use_body=st.session_state.user_settings['ob_use_body']
+                    )
+                    blocks_df = pd.DataFrame(blocks)
+                    if not blocks_df.empty:
+                        blocks_df.to_excel(writer, sheet_name="Order Blocks")
+            
             st.success(f"Dados exportados! [Download aqui]({tmp.name})")
 
 st.sidebar.markdown("""
@@ -1412,6 +1782,10 @@ st.sidebar.markdown("""
 - 🟡 **NEUTRO**: Sem sinal claro
 - ✅ **FORTE COMPRA**: 3+ sinais de diferença
 - ❌ **FORTE VENDA**: 3+ sinais de diferença
+- 🔵 **ORDER BLOCK (COMPRA)**: Zona de interesse para compra
+- 🟠 **ORDER BLOCK (VENDA)**: Zona de interesse para venda
+- 🟢 **BREAKER BLOCK (SUPORTE)**: Zona de suporte após rompimento
+- 🔴 **BREAKER BLOCK (RESISTÊNCIA)**: Zona de resistência após rompimento
 
 **📊 Indicadores:**
 1. Médias Móveis (7, 30, 200 dias)
@@ -1422,9 +1796,10 @@ st.sidebar.markdown("""
 6. OBV (fluxo de capital)
 7. Stochastic (sobrecompra/sobrevenda)
 8. Regressão de Processo Gaussiano (previsão)
-9. Fluxo de Exchanges
-10. Hashrate vs Dificuldade
-11. Atividade de Whales
-12. Análise Sentimental
-13. Comparação com Mercado Tradicional
+9. Order Blocks & Breaker Blocks (LuxAlgo)
+10. Fluxo de Exchanges
+11. Hashrate vs Dificuldade
+12. Atividade de Whales
+13. Análise Sentimental
+14. Comparação com Mercado Tradicional
 """)
