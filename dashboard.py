@@ -119,9 +119,11 @@ def is_confirmed(signal, previous_signals, confirmation_bars=2):
         return False
     return all(s == signal for s in previous_signals[-confirmation_bars:])
     def identify_order_blocks(df, swing_length=10, show_bull=3, show_bear=3, use_body=True):
+def identify_order_blocks(df, swing_length=10, show_bull=3, show_bear=3, use_body=True):
     """Identifica Order Blocks com estabilidade"""
     df = df.copy()
     
+    # Identificação de swings
     if use_body:
         df['swing_high'] = df['close'].rolling(swing_length, center=True).max()
         df['swing_low'] = df['close'].rolling(swing_length, center=True).min()
@@ -156,7 +158,47 @@ def is_confirmed(signal, previous_signals, confirmation_bars=2):
                 'weight': INDICATOR_WEIGHTS['order_blocks']
             })
     
-    # Bearish Order Blocks (código similar...)
+    # Bearish Order Blocks
+    bearish_blocks = df[df['close'] == df['swing_low']].copy()
+    bearish_blocks = bearish_blocks.sort_values('date', ascending=False).head(show_bear)
+    
+    for idx, row in bearish_blocks.iterrows():
+        block_start = row['date'] - pd.Timedelta(days=swing_length//2)
+        block_end = row['date'] + pd.Timedelta(days=swing_length//2)
+        
+        block_df = df[(df['date'] >= block_start) & (df['date'] <= block_end)]
+        
+        if not block_df.empty:
+            high = block_df['high'].max() if not use_body else block_df['close'].max()
+            low = block_df['low'].min() if not use_body else block_df['close'].min()
+            
+            blocks.append({
+                'type': 'bearish_ob',
+                'start_date': block_start,
+                'end_date': block_end,
+                'high': high,
+                'low': low,
+                'trigger_price': row['close'],
+                'broken': False,
+                'weight': INDICATOR_WEIGHTS['order_blocks']
+            })
+    
+    # Verificação de Breaker Blocks
+    for block in blocks:
+        if block['type'] == 'bullish_ob':
+            subsequent_data = df[df['date'] > block['end_date']]
+            if not subsequent_data.empty:
+                if subsequent_data['close'].min() < block['low']:
+                    block['broken'] = True
+                    block['breaker_type'] = 'bullish_breaker'
+        
+        elif block['type'] == 'bearish_ob':
+            subsequent_data = df[df['date'] > block['end_date']]
+            if not subsequent_data.empty:
+                if subsequent_data['close'].max() > block['high']:
+                    block['broken'] = True
+                    block['breaker_type'] = 'bearish_breaker'
+    
     return df, blocks
 
 def plot_order_blocks(fig, blocks, current_price):
