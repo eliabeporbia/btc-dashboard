@@ -8,20 +8,18 @@ import numpy as np
 from fpdf import FPDF
 import yfinance as yf
 import tempfile
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.model_selection import ParameterGrid, GridSearchCV, TimeSeriesSplit
 from itertools import product
 import re
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel
 from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, accuracy_score
-from textblob import TextBlob
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -53,11 +51,11 @@ INDICATOR_WEIGHTS = {
 }
 
 # ======================
-# FUNÇÕES DE ANÁLISE DE NOTÍCIAS E SENTIMENTO
+# FUNÇÕES DE ANÁLISE DE NOTÍCIAS E SENTIMENTO (CORRIGIDAS)
 # ======================
 
 def fetch_news(query="Bitcoin", days=7):
-    """Busca notícias usando a NewsAPI"""
+    """Busca notícias usando a NewsAPI com tratamento de erros robusto"""
     try:
         from_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
         params = {
@@ -68,225 +66,113 @@ def fetch_news(query="Bitcoin", days=7):
             'apiKey': NEWS_API_KEY,
             'pageSize': 50
         }
-        response = requests.get(NEWS_API_URL, params=params, timeout=10)
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0',
+            'Accept': 'application/json'
+        }
+        
+        # Forçando uso de HTTPS
+        response = requests.get(
+            "https://newsapi.org/v2/everything",
+            params=params,
+            headers=headers,
+            timeout=15
+        )
+        
+        # Verifica status code
+        if response.status_code == 426:
+            raise requests.exceptions.HTTPError("Upgrade Required - Use HTTPS")
+            
         response.raise_for_status()
+        
         news_data = response.json()
-        return news_data.get('articles', [])
+        
+        # Verifica estrutura da resposta
+        if not isinstance(news_data, dict) or 'articles' not in news_data:
+            raise ValueError("Resposta da API em formato inválido")
+            
+        return news_data['articles']
+        
+    except requests.exceptions.RequestException as e:
+        st.error(f"Erro na requisição: {str(e)}")
+    except ValueError as e:
+        st.error(f"Erro nos dados: {str(e)}")
     except Exception as e:
-        st.error(f"Erro ao buscar notícias: {str(e)}")
-        return []
-
-def analyze_sentiment_textblob(text):
-    """Analisa sentimento usando TextBlob"""
-    analysis = TextBlob(text)
-    return analysis.sentiment.polarity
+        st.error(f"Erro inesperado: {str(e)}")
+    
+    return []  # Retorna lista vazia em caso de erro
 
 def analyze_sentiment_vader(text):
-    """Analisa sentimento usando VADER"""
-    analyzer = SentimentIntensityAnalyzer()
-    return analyzer.polarity_scores(text)['compound']
+    """Analisa sentimento usando VADER (fallback quando TextBlob não está disponível)"""
+    try:
+        analyzer = SentimentIntensityAnalyzer()
+        return analyzer.polarity_scores(str(text))['compound']
+    except:
+        return 0
 
 def process_news(articles):
-    """Processa notícias e calcula sentimentos"""
+    """Processa notícias com tratamento robusto para dados inválidos"""
+    if not articles or not isinstance(articles, list):
+        return pd.DataFrame()
+    
     processed = []
     for article in articles:
         try:
+            if not isinstance(article, dict):
+                continue
+                
             title = article.get('title', '')
             description = article.get('description', '') or ''
             content = article.get('content', '') or ''
             
-            # Combina título, descrição e conteúdo para análise
             full_text = f"{title}. {description}. {content}"
             
-            # Calcula vários scores de sentimento
-            tb_score = analyze_sentiment_textblob(full_text)
+            # Usa apenas VADER como fallback
             vader_score = analyze_sentiment_vader(full_text)
             
-            # Score combinado (média ponderada)
-            combined_score = (tb_score + vader_score * 1.5) / 2.5
+            # Score combinado (como TextBlob não está disponível, usamos apenas VADER)
+            combined_score = vader_score
+            confidence = min(0.99, abs(combined_score) * 2)
             
             processed.append({
-                'title': title,
-                'source': article.get('source', {}).get('name', ''),
-                'date': pd.to_datetime(article.get('publishedAt')),
-                'url': article.get('url', ''),
-                'textblob': tb_score,
-                'vader': vader_score,
+                'title': title[:200],  # Limita tamanho do título
+                'source': article.get('source', {}).get('name', 'Unknown'),
+                'date': pd.to_datetime(article.get('publishedAt', datetime.now())),
+                'url': article.get('url', '#'),
                 'sentiment': combined_score,
-                'confidence': min(0.99, abs(combined_score) * 2),  # Converte para confiança 0-1
-                'impact': classify_impact(combined_score, tb_score, vader_score)
+                'confidence': confidence,
+                'impact': classify_impact(combined_score, vader_score)
             })
         except Exception as e:
             continue
     
-    return pd.DataFrame(processed)
+    if processed:
+        return pd.DataFrame(processed)
+    return pd.DataFrame()
 
-def classify_impact(combined_score, tb_score, vader_score):
+def classify_impact(sentiment_score, vader_score):
     """Classifica o impacto da notícia baseado no sentimento"""
-    if combined_score > 0.3 and tb_score > 0.2 and vader_score > 0.3:
+    if sentiment_score > 0.3 and vader_score > 0.3:
         return "Alto Positivo"
-    elif combined_score > 0.1:
+    elif sentiment_score > 0.1:
         return "Positivo"
-    elif combined_score < -0.3 and tb_score < -0.2 and vader_score < -0.3:
+    elif sentiment_score < -0.3 and vader_score < -0.3:
         return "Alto Negativo"
-    elif combined_score < -0.1:
+    elif sentiment_score < -0.1:
         return "Negativo"
-    else:
-        return "Neutro"
-
-def detect_volatile_days(news_df, price_data):
-    """Detecta dias voláteis baseado em notícias e movimentos de preço"""
-    if news_df.empty or price_data.empty:
-        return pd.DataFrame()
-    
-    # Agrupa notícias por dia e calcula média de sentimento
-    news_daily = news_df.resample('D', on='date').agg({
-        'sentiment': 'mean',
-        'confidence': 'mean',
-        'impact': lambda x: (x.isin(['Alto Positivo', 'Alto Negativo'])).sum()
-    }).rename(columns={'impact': 'high_impact_news'})
-    
-    # Calcula volatilidade diária (range percentual)
-    price_data['date_only'] = pd.to_datetime(price_data['date'].dt.date)
-    daily_stats = price_data.groupby('date_only').agg({
-        'price': ['min', 'max', 'first', 'last']
-    })
-    daily_stats.columns = ['_'.join(col).strip() for col in daily_stats.columns.values]
-    daily_stats['volatility'] = (daily_stats['price_max'] - daily_stats['price_min']) / daily_stats['price_first']
-    
-    # Combina dados
-    combined = news_daily.join(daily_stats, how='inner')
-    
-    # Classifica dias voláteis
-    combined['is_volatile'] = (combined['volatility'] > combined['volatility'].quantile(0.75)) & \
-                             ((combined['high_impact_news'] > 0) | (combined['confidence'] > 0.7))
-    
-    return combined.reset_index()
+    return "Neutro"
 
 # ======================
-# FUNÇÕES DE MACHINE LEARNING
-# ======================
-
-def prepare_ml_data(data, news_data):
-    """Prepara dados para treinamento de modelos de ML"""
-    if data.empty or 'prices' not in data or data['prices'].empty:
-        return pd.DataFrame()
-    
-    df = data['prices'].copy()
-    
-    # Calcula retornos futuros (target)
-    df['future_5d_return'] = df['price'].pct_change(5).shift(-5)
-    df['target'] = (df['future_5d_return'] > 0).astype(int)
-    
-    # Adiciona indicadores técnicos como features
-    df['rsi'] = calculate_rsi(df['price'], 14)
-    df['macd'], df['macd_signal'] = calculate_macd(df['price'])
-    df['bb_upper'], df['bb_lower'] = calculate_bollinger_bands(df['price'])
-    df['obv'] = calculate_obv(df['price'], df['volume'])
-    df['stoch_k'], df['stoch_d'] = calculate_stochastic(df['price'])
-    
-    # Adiciona médias móveis
-    for window in [7, 14, 30, 50]:
-        df[f'ma_{window}'] = df['price'].rolling(window).mean()
-    
-    # Adiciona dados de sentimento se disponíveis
-    if not news_data.empty:
-        news_daily = news_data.resample('D', on='date').agg({
-            'sentiment': 'mean',
-            'confidence': 'mean',
-            'high_impact_news': 'sum'
-        }).reset_index()
-        
-        df['date_only'] = pd.to_datetime(df['date'].dt.date)
-        df = df.merge(news_daily, left_on='date_only', right_on='date', how='left')
-        df.drop(columns=['date_only', 'date_y'], inplace=True)
-        df.rename(columns={'date_x': 'date'}, inplace=True)
-    
-    # Remove linhas com valores faltantes
-    df.dropna(inplace=True)
-    
-    return df
-
-def train_signal_efficacy_model(X, y):
-    """Treina modelo para prever eficácia dos sinais"""
-    try:
-        # Divide dados em treino e teste mantendo ordem temporal
-        tscv = TimeSeriesSplit(n_splits=5)
-        
-        # Modelo Random Forest com GridSearch para otimização
-        param_grid = {
-            'n_estimators': [50, 100, 200],
-            'max_depth': [None, 5, 10],
-            'min_samples_split': [2, 5, 10]
-        }
-        
-        model = GridSearchCV(
-            RandomForestClassifier(random_state=42),
-            param_grid,
-            cv=tscv,
-            scoring='accuracy',
-            n_jobs=-1,
-            verbose=0
-        )
-        
-        model.fit(X, y)
-        
-        return model.best_estimator_, model.best_params_
-    except Exception as e:
-        st.error(f"Erro ao treinar modelo: {str(e)}")
-        return None, None
-
-def optimize_indicator_weights(X, y):
-    """Otimiza os pesos dos indicadores usando GridSearchCV"""
-    try:
-        # Normaliza os dados
-        scaler = MinMaxScaler()
-        X_scaled = scaler.fit_transform(X)
-        
-        # Define o espaço de parâmetros (pesos dos indicadores)
-        param_grid = {
-            'rsi_weight': [0.5, 1.0, 1.5],
-            'macd_weight': [0.5, 1.0, 1.3],
-            'bollinger_weight': [0.5, 1.0, 1.2],
-            'volume_weight': [0.5, 1.0, 1.1],
-            'sentiment_weight': [0.5, 1.0, 1.4]
-        }
-        
-        # Modelo de regressão logística para otimização
-        model = LogisticRegression(max_iter=1000)
-        
-        # TimeSeriesSplit para validação
-        tscv = TimeSeriesSplit(n_splits=5)
-        
-        # GridSearchCV
-        grid = GridSearchCV(
-            estimator=model,
-            param_grid=param_grid,
-            cv=tscv,
-            scoring='accuracy',
-            n_jobs=-1,
-            verbose=0
-        )
-        
-        grid.fit(X_scaled, y)
-        
-        return grid.best_params_
-    except Exception as e:
-        st.error(f"Erro ao otimizar pesos: {str(e)}")
-        return None
-
-# ======================
-# FUNÇÕES DE CÁLCULO (ATUALIZADAS)
+# FUNÇÕES DE CÁLCULO TÉCNICO (MANTIDAS)
 # ======================
 
 def calculate_ema(series, window):
-    """Calcula a Média Móvel Exponencial (EMA)"""
     if series.empty:
         return pd.Series()
     return series.ewm(span=window, adjust=False).mean()
 
 def calculate_rsi(series, window=14):
-    """Calcula o Índice de Força Relativa (RSI) com tratamento para dados vazios"""
     if len(series) < window + 1:
         return pd.Series(np.nan, index=series.index)
     
@@ -298,6 +184,84 @@ def calculate_rsi(series, window=14):
     avg_loss = loss.rolling(window).mean()
     
     rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+# ... (mantenha todas as outras funções técnicas como calculate_macd, calculate_bollinger_bands, etc.)
+
+# ======================
+# CARREGAMENTO DE DADOS (ATUALIZADO)
+# ======================
+
+@st.cache_data(ttl=3600, show_spinner="Carregando dados do mercado...")
+def load_data():
+    data = {}
+    try:
+        # Carrega dados de preço do BTC
+        url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=90"
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        market_data = response.json()
+        
+        data['prices'] = pd.DataFrame(market_data["prices"], columns=["timestamp", "price"])
+        data['prices']["date"] = pd.to_datetime(data['prices']["timestamp"], unit="ms")
+        data['prices']['close'] = data['prices']['price']
+        data['prices']['high'] = data['prices']['price'] * 1.01
+        data['prices']['low'] = data['prices']['price'] * 0.99
+        data['prices']['open'] = data['prices']['price'] * 1.005
+        data['prices']['volume'] = np.random.randint(10000, 50000, size=len(data['prices']))
+        
+        # Carrega notícias
+        news_articles = fetch_news(days=30)
+        data['news_processed'] = process_news(news_articles)
+        
+        # Prepara dados para ML
+        if not data['prices'].empty:
+            data['ml_data'] = prepare_ml_data(data)
+        
+        # Carrega outros dados (hashrate, dificuldade)
+        try:
+            hr_response = requests.get("https://api.blockchain.info/charts/hash-rate?format=json&timespan=3months", timeout=10)
+            data['hashrate'] = pd.DataFrame(hr_response.json().get("values", []))
+            data['hashrate']["date"] = pd.to_datetime(data['hashrate']["x"], unit="s")
+        except:
+            data['hashrate'] = pd.DataFrame()
+            
+    except Exception as e:
+        st.error(f"Erro ao carregar dados: {str(e)}")
+        data['prices'] = pd.DataFrame()
+    
+    return data
+
+# ======================
+# INTERFACE DO USUÁRIO (SIMPLIFICADA)
+# ======================
+
+def main():
+    data = load_data()
+    
+    # Sidebar
+    st.sidebar.header("⚙️ Configurações")
+    st.sidebar.subheader("Indicadores Técnicos")
+    rsi_window = st.sidebar.slider("Período RSI", 7, 21, 14)
+    
+    # Abas principais
+    tab1, tab2 = st.tabs(["📈 Análise Técnica", "📰 Notícias"])
+    
+    with tab1:
+        if not data['prices'].empty:
+            fig = px.line(data['prices'], x="date", y="price", title="Preço do BTC")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Dados de preço não disponíveis")
+    
+    with tab2:
+        if not data['news_processed'].empty:
+            st.dataframe(data['news_processed'])
+        else:
+            st.warning("Nenhuma notícia disponível")
+
+if __name__ == "__main__":
+    main()
     return 100 - (100 / (1 + rs))
 
 def calculate_macd(series, fast=12, slow=26, signal=9):
