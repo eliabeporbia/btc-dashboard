@@ -440,7 +440,7 @@ def plot_order_blocks(fig, blocks, current_price):
                              x0=block['start_date'], y0=block['low'],
                              x1=block['end_date'], y1=block['high'],
                              line=dict(color="red", width=1),
-                             fillcolor="rgba(255, 0, 0, 0.1)"))
+                             fillcolor="rgba(255, 0, 0, 0.1)")
                 
                 # Linha de gatilho
                 fig.add_shape(type="line",
