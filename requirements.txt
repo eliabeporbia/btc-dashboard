@@ -10,7 +10,7 @@ matplotlib>=3.7.0
 textblob
 vaderSentiment
 transformers>=4.30.0
-tensorflow>=2.0.0
+tensorflow>=2.12
 stable-baselines3>=2.0.0
 gym>=0.26.0
 torch>=2.0.0
