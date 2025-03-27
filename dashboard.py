@@ -1130,7 +1130,7 @@ st.sidebar.subheader("🔍 Clusterização K-Means")
 n_clusters = st.sidebar.slider(
     "Número de Clusters (S/R)",
     3, 10,
-    st.session_state.user_settings['n_clusters']
+    st.session_state.user_settings.get('n_clusters', 5)  # Usando .get() com valor padrão
 )
 
 st.sidebar.subheader("🔔 Alertas Automáticos")
