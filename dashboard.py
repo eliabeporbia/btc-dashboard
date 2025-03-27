@@ -169,7 +169,7 @@ def analyze_news_sentiment(news_list, _model):
             continue
     return results
 
-@st.cache_resource
+@st.cache_resource  # Decorador moderno para modelos ML
 def create_lstm_model(input_shape, units=50):
     """Cria modelo LSTM para previsão de preços"""
     model = Sequential([
@@ -182,7 +182,7 @@ def create_lstm_model(input_shape, units=50):
     ])
     model.compile(optimizer=Adam(learning_rate=0.001), loss='mean_squared_error')
     return model
-
+    
 def prepare_lstm_data(data, n_steps=60):
     """Prepara os dados para o LSTM"""
     scaler = MinMaxScaler(feature_range=(0,1))
