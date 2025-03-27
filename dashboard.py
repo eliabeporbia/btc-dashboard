@@ -118,7 +118,6 @@ def is_confirmed(signal, previous_signals, confirmation_bars=2):
     if len(previous_signals) < confirmation_bars:
         return False
     return all(s == signal for s in previous_signals[-confirmation_bars:])
-    def identify_order_blocks(df, swing_length=10, show_bull=3, show_bear=3, use_body=True):
 def identify_order_blocks(df, swing_length=10, show_bull=3, show_bear=3, use_body=True):
     """Identifica Order Blocks com estabilidade"""
     df = df.copy()
