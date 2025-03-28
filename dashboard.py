@@ -21,8 +21,8 @@ from tensorflow.keras.optimizers import Adam
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.vec_env import DummyVecEnv
-import gym
-from gym import spaces
+import gymnasium
+from gymnasium import spaces
 import torch
 import torch.nn as nn
 import torch.optim as optim
