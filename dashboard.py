@@ -440,13 +440,13 @@ def plot_order_blocks(fig, blocks, current_price):
                              x0=block['start_date'], y0=block['low'],
                              x1=block['end_date'], y1=block['high'],
                              line=dict(color="red", width=1),
-                             fillcolor="rgba(255, 0, 0, 0.1)"))
+                             fillcolor="rgba(255, 0, 0, 0.1)")
                 
                 # Linha de gatilho
                 fig.add_shape(type="line",
                              x0=block['start_date'], y0=block['trigger_price'],
                              x1=block['end_date'], y1=block['trigger_price'],
-                             line=dict(color="red", width=1, dash="dot"))
+                             line=dict(color="red", width=1, dash="dot")
                 
             elif block['breaker_type'] == 'bearish_breaker':
                 # Bloco de venda quebrado (verde)
