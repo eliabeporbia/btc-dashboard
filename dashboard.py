@@ -150,10 +150,14 @@ class BitcoinTradingEnv(gym.Env):
         profit = self.total_profit
         print(f'Step: {self.current_step}, Profit: {profit}')
 
-@st.cache_resource  # ← Novo decorador para modelos (não use allow_output_mutation)
+@st.cache_resource
 def load_sentiment_model():
-    """Carrega o modelo de análise de sentimentos"""
-    return pipeline("sentiment-analysis", model="finiteautomata/bertweet-base-sentiment-analysis")
+    return pipeline(
+        "sentiment-analysis",
+        model="finiteautomata/bertweet-base-sentiment-analysis",
+        framework="pt",  # Força PyTorch
+        device="cpu"    # Remove se tiver GPU
+    )
 
 def analyze_news_sentiment(news_list, _model):
     """Analisa o sentimento das notícias"""
