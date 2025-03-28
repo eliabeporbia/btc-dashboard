@@ -1971,12 +1971,15 @@ def main():
                 with st.spinner(f"Treinando agente RL com {st.session_state.user_settings['rl_episodes']} episódios..."):
                     try:
                         # Preparar ambiente
-                        env = DummyVecEnv([lambda: BitcoinTradingEnv(data['prices'])])
+                        env = BitcoinTradingEnv(data['prices'])
+                        
+                        # Verificar se o ambiente está correto
+                        check_env(env)
                         
                         # Criar e treinar modelo com parâmetros mais conservadores
                         model = PPO(
                             'MlpPolicy', 
-                            env, 
+                            DummyVecEnv([lambda: env]), 
                             verbose=0,
                             learning_rate=1e-4,  # Taxa de aprendizado mais baixa
                             n_steps=1024,       # Número de passos por atualização
