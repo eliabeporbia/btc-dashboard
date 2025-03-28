@@ -95,34 +95,37 @@ def reset(self, seed=None, options=None):
     }
     return state, info  # Agora retorna 2 valores!
 
-class BitcoinTradingEnv(gym.Env):
-    def __init__(self, df, initial_balance=10000):
+ def __init__(self, df, initial_balance=10000):
         super(BitcoinTradingEnv, self).__init__()
-        
         self.df = df
         self.initial_balance = initial_balance
         
-        # Ações: 0 = hold, 1 = buy, 2 = sell
-        self.action_space = spaces.Discrete(3)
+        # Definir espaços de ação e observação
+        self.action_space = spaces.Discrete(3)  # 0=hold, 1=buy, 2=sell
         
-        # Espaço de observação: preço, volume, indicadores técnicos
+        # Exemplo: 10 features normalizadas entre 0 e 1
         self.observation_space = spaces.Box(
             low=0, high=1, 
-            shape=(10,),  # Ajuste conforme necessário
+            shape=(10,),  
             dtype=np.float32
         )
         
         self.reset()
-    
-    def reset(self):
+
+    def reset(self, seed=None, options=None):
+        # Inicializar estado
         self.balance = self.initial_balance
         self.btc_held = 0
         self.current_step = 0
         self.total_profit = 0
-        return self._next_observation()
-    
+        
+        # Retornar a primeira observação (e info, se necessário)
+        obs = self._next_observation()
+        info = {}
+        return obs, info  # Gymnasium requer (obs, info)
+
     def _next_observation(self):
-        # Normalizar os dados para o modelo
+        # Garantir que os dados estão normalizados corretamente
         obs = np.array([
             self.df.iloc[self.current_step]['price'] / 100000,
             self.df.iloc[self.current_step]['volume'] / 1000000,
@@ -134,7 +137,8 @@ class BitcoinTradingEnv(gym.Env):
             self.current_step / len(self.df),
             self.df.iloc[self.current_step]['BB_Upper_20'] / 100000,
             self.df.iloc[self.current_step]['BB_Lower_20'] / 100000
-        ])
+        ], dtype=np.float32)  # <--- Garanta que é float32!
+        
         return obs
     
     def step(self, action):
