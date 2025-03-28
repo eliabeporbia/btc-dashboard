@@ -79,13 +79,14 @@ class BitcoinTradingEnv(gym.Env):
         super(BitcoinTradingEnv, self).__init__()
         self.df = df
         self.initial_balance = initial_balance
+        self.current_step = 0
         
         # Definir espaços de ação e observação
         self.action_space = spaces.Discrete(3)  # 0=hold, 1=buy, 2=sell
         
-        # Exemplo: 10 features normalizadas entre 0 e 1
+        # Observação: preço, volume, RSI, MACD, BB, saldo, BTC em posse
         self.observation_space = spaces.Box(
-            low=0, high=1, 
+            low=0, high=np.inf, 
             shape=(10,),  
             dtype=np.float32
         )
@@ -99,24 +100,24 @@ class BitcoinTradingEnv(gym.Env):
         self.current_step = 0
         self.total_profit = 0
         
-        # Retornar a primeira observação (e info, se necessário)
+        # Retornar a primeira observação
         obs = self._next_observation()
         info = {}
-        return obs, info  # Gymnasium requer (obs, info)
+        return obs, info
 
     def _next_observation(self):
-        # Garantir que os dados estão normalizados corretamente
+        # Normalizar os dados para a observação
         obs = np.array([
             self.df.iloc[self.current_step]['price'] / 100000,
             self.df.iloc[self.current_step]['volume'] / 1000000,
-            self.df.iloc[self.current_step]['RSI_14'] / 100,
-            self.df.iloc[self.current_step]['MACD'] / 1000,
-            self.df.iloc[self.current_step]['MACD_Signal'] / 1000,
+            self.df.iloc[self.current_step].get('RSI_14', 50) / 100,
+            self.df.iloc[self.current_step].get('MACD', 0) / 1000,
+            self.df.iloc[self.current_step].get('MACD_Signal', 0) / 1000,
             self.balance / self.initial_balance,
             self.btc_held * self.df.iloc[self.current_step]['price'] / self.initial_balance,
             self.current_step / len(self.df),
-            self.df.iloc[self.current_step]['BB_Upper_20'] / 100000,
-            self.df.iloc[self.current_step]['BB_Lower_20'] / 100000
+            self.df.iloc[self.current_step].get('BB_Upper_20', 0) / 100000,
+            self.df.iloc[self.current_step].get('BB_Lower_20', 0) / 100000
         ], dtype=np.float32)
         
         return obs
