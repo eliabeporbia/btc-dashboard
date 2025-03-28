@@ -117,7 +117,7 @@ class BitcoinTradingEnv(gym.Env):
             self.current_step / len(self.df),
             self.df.iloc[self.current_step]['BB_Upper_20'] / 100000,
             self.df.iloc[self.current_step]['BB_Lower_20'] / 100000
-        ], dtype=np.float32)  # <--- Garanta que é float32!
+        ], dtype=np.float32)
         
         return obs
     
@@ -149,7 +149,8 @@ class BitcoinTradingEnv(gym.Env):
         reward = portfolio_value - self.initial_balance
         
         # Gymnasium requer (obs, reward, terminated, truncated, info)
-        return self._next_observation(), reward, done, False, {'total_profit': self.total_profit}
+        truncated = False  # Adicionado para compatibilidade
+        return self._next_observation(), reward, done, truncated, {'total_profit': self.total_profit}
     
     def render(self, mode='human'):
         profit = self.total_profit
@@ -178,7 +179,7 @@ def analyze_news_sentiment(news_list, _model):
             continue
     return results
 
-@st.cache_resource  # Decorador moderno para modelos ML
+@st.cache_resource
 def create_lstm_model(input_shape, units=50):
     """Cria modelo LSTM para previsão de preços"""
     model = Sequential([
