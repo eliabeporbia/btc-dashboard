@@ -84,9 +84,10 @@ class BitcoinTradingEnv(gym.Env):
         # Definir espaços de ação e observação
         self.action_space = spaces.Discrete(3)  # 0=hold, 1=buy, 2=sell
         
-        # Observação: preço, volume, RSI, MACD, BB, saldo, BTC em posse
+        # Observação ajustada para permitir valores negativos (MACD pode ser negativo)
         self.observation_space = spaces.Box(
-            low=0, high=np.inf, 
+            low=-np.inf,  # Permite valores negativos
+            high=np.inf, 
             shape=(10,),  
             dtype=np.float32
         )
@@ -106,19 +107,24 @@ class BitcoinTradingEnv(gym.Env):
         return obs, info
 
     def _next_observation(self):
-        # Normalizar os dados para a observação
+        # Normalizar os dados para a observação com tratamento robusto
+        current_data = self.df.iloc[self.current_step]
+        
         obs = np.array([
-            self.df.iloc[self.current_step]['price'] / 100000,
-            self.df.iloc[self.current_step]['volume'] / 1000000,
-            self.df.iloc[self.current_step].get('RSI_14', 50) / 100,
-            self.df.iloc[self.current_step].get('MACD', 0) / 1000,
-            self.df.iloc[self.current_step].get('MACD_Signal', 0) / 1000,
-            self.balance / self.initial_balance,
-            self.btc_held * self.df.iloc[self.current_step]['price'] / self.initial_balance,
-            self.current_step / len(self.df),
-            self.df.iloc[self.current_step].get('BB_Upper_20', 0) / 100000,
-            self.df.iloc[self.current_step].get('BB_Lower_20', 0) / 100000
+            current_data['price'] / 100000,  # Normalização de preço
+            current_data['volume'] / 1000000,  # Normalização de volume
+            np.clip(current_data.get('RSI_14', 50) / 100, 0, 1),  # RSI entre 0 e 1
+            current_data.get('MACD', 0) / 1000,  # MACD pode ser negativo
+            current_data.get('MACD_Signal', 0) / 1000,
+            max(0, self.balance / self.initial_balance),  # Saldo normalizado (não negativo)
+            max(0, self.btc_held * current_data['price'] / self.initial_balance),  # Valor BTC normalizado
+            np.clip(self.current_step / len(self.df), 0, 1),  # Progresso entre 0 e 1
+            current_data.get('BB_Upper_20', 0) / 100000,
+            current_data.get('BB_Lower_20', 0) / 100000
         ], dtype=np.float32)
+        
+        # Garantir que não há NaN ou infinitos
+        obs = np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=0.0)
         
         return obs
     
@@ -150,7 +156,7 @@ class BitcoinTradingEnv(gym.Env):
         reward = portfolio_value - self.initial_balance
         
         # Gymnasium requer (obs, reward, terminated, truncated, info)
-        truncated = False  # Adicionado para compatibilidade
+        truncated = False
         return self._next_observation(), reward, done, truncated, {'total_profit': self.total_profit}
     
     def render(self, mode='human'):
@@ -287,11 +293,11 @@ def calculate_obv(price_series, volume_series):
 
 def calculate_stochastic(price_series, k_window=14, d_window=3):
     """Calcula o Stochastic Oscillator"""
-    low_min = price_series.rolling(window=k_window).min()
-    high_max = price_series.rolling(window=k_window).max()
+    low_min = price_series.rolling(k_window).min()
+    high_max = price_series.rolling(k_window).max()
     stoch = 100 * (price_series - low_min) / (high_max - low_min)
-    stoch_k = stoch.rolling(window=d_window).mean()
-    stoch_d = stoch_k.rolling(window=d_window).mean()
+    stoch_k = stoch.rolling(d_window).mean()
+    stoch_d = stoch_k.rolling(d_window).mean()
     return stoch_k, stoch_d
 
 def calculate_gaussian_process(price_series, window=30, lookahead=5):
