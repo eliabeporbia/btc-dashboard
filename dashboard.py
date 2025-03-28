@@ -74,13 +74,26 @@ DEFAULT_SETTINGS = {
 # FUNÇÕES DE IA
 # ======================
 
-class BitcoinTradingEnv(gym.Env):
-    """Ambiente de trading para Reinforcement Learning"""
-    def __init__(self, df, initial_balance=10000):
-        super(BitcoinTradingEnv, self).__init__()
-        self.df = df
-        self.initial_balance = initial_balance
-        self.current_step = 0
+def reset(self, seed=None, options=None):
+    # Inicialização padrão do Gymnasium
+    super().reset(seed=seed)
+    
+    # Reset do seu ambiente específico
+    self.current_step = 0
+    self.balance = self.initial_balance
+    self.btc_held = 0
+    self.total_profit = 0
+    
+    # Gere o estado inicial (exemplo)
+    state = self._get_state()
+    
+    # Gymnasium exige que retorne (obs, info)
+    info = {
+        'step': self.current_step,
+        'balance': self.balance,
+        'btc_held': self.btc_held
+    }
+    return state, info  # Agora retorna 2 valores!
         
         # Ações: 0 = hold, 1 = buy, 2 = sell
         self.action_space = spaces.Discrete(3)
