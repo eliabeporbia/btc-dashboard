@@ -96,7 +96,7 @@ def reset(self, seed=None, options=None):
     return state, info  # Agora retorna 2 valores!
         
         # Ações: 0 = hold, 1 = buy, 2 = sell
-        self.action_space = spaces.Discrete(3)
+        self.action_space = spaces.Discrete(3)  # Mantenha essa linha COM 8 ESPAÇOS antes
         
         # Espaço de observação: preço, volume, indicadores técnicos
         self.observation_space = spaces.Box(
