@@ -21,8 +21,8 @@ from tensorflow.keras.optimizers import Adam
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.vec_env import DummyVecEnv
-import gym
-from gym import spaces
+import gymnasium as gym
+from gymnasium import spaces
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -74,13 +74,33 @@ DEFAULT_SETTINGS = {
 # FUNÇÕES DE IA
 # ======================
 
+def reset(self, seed=None, options=None):
+    # Inicialização padrão do Gymnasium
+    super().reset(seed=seed)
+    
+    # Reset do seu ambiente específico
+    self.current_step = 0
+    self.balance = self.initial_balance
+    self.btc_held = 0
+    self.total_profit = 0
+    
+    # Gere o estado inicial (exemplo)
+    state = self._get_state()
+    
+    # Gymnasium exige que retorne (obs, info)
+    info = {
+        'step': self.current_step,
+        'balance': self.balance,
+        'btc_held': self.btc_held
+    }
+    return state, info  # Agora retorna 2 valores!
+
 class BitcoinTradingEnv(gym.Env):
-    """Ambiente de trading para Reinforcement Learning"""
     def __init__(self, df, initial_balance=10000):
         super(BitcoinTradingEnv, self).__init__()
+        
         self.df = df
         self.initial_balance = initial_balance
-        self.current_step = 0
         
         # Ações: 0 = hold, 1 = buy, 2 = sell
         self.action_space = spaces.Discrete(3)
@@ -152,8 +172,12 @@ class BitcoinTradingEnv(gym.Env):
 
 @st.cache_resource
 def load_sentiment_model():
-    """Carrega o modelo de análise de sentimentos"""
-    return pipeline("sentiment-analysis", model="finiteautomata/bertweet-base-sentiment-analysis")
+    return pipeline(
+        "sentiment-analysis",
+        model="finiteautomata/bertweet-base-sentiment-analysis",
+        framework="pt",  # Força PyTorch
+        device="cpu"    # Remove se tiver GPU
+    )
 
 def analyze_news_sentiment(news_list, _model):
     """Analisa o sentimento das notícias"""
@@ -169,7 +193,7 @@ def analyze_news_sentiment(news_list, _model):
             continue
     return results
 
-@st.cache_resource
+@st.cache_resource  # Decorador moderno para modelos ML
 def create_lstm_model(input_shape, units=50):
     """Cria modelo LSTM para previsão de preços"""
     model = Sequential([
@@ -182,7 +206,7 @@ def create_lstm_model(input_shape, units=50):
     ])
     model.compile(optimizer=Adam(learning_rate=0.001), loss='mean_squared_error')
     return model
-
+    
 def prepare_lstm_data(data, n_steps=60):
     """Prepara os dados para o LSTM"""
     scaler = MinMaxScaler(feature_range=(0,1))
@@ -446,7 +470,7 @@ def plot_order_blocks(fig, blocks, current_price):
                 fig.add_shape(type="line",
                              x0=block['start_date'], y0=block['trigger_price'],
                              x1=block['end_date'], y1=block['trigger_price'],
-                             line=dict(color="red", width=1, dash="dot")
+                             line=dict(color="red", width=1, dash="dot"))
                 
             elif block['breaker_type'] == 'bearish_breaker':
                 # Bloco de venda quebrado (verde)
@@ -454,7 +478,7 @@ def plot_order_blocks(fig, blocks, current_price):
                              x0=block['start_date'], y0=block['low'],
                              x1=block['end_date'], y1=block['high'],
                              line=dict(color="green", width=1),
-                             fillcolor="rgba(0, 255, 0, 0.1)"))
+                             fillcolor="rgba(0, 255, 0, 0.1)")
                 
                 # Linha de gatilho
                 fig.add_shape(type="line",
