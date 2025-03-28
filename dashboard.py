@@ -1969,28 +1969,47 @@ def main():
                 st.error("Dados insuficientes para treinamento RL")
             else:
                 with st.spinner(f"Treinando agente RL com {st.session_state.user_settings['rl_episodes']} episódios..."):
-                    # Preparar ambiente
-                    env = DummyVecEnv([lambda: BitcoinTradingEnv(data['prices'])])
-                    
-                    # Criar e treinar modelo
-                    model = PPO('MlpPolicy', env, verbose=0)
-                    model.learn(total_timesteps=st.session_state.user_settings['rl_episodes'])
-                    
-                    # Salvar modelo na sessão
-                    st.session_state.rl_model = model
-                    st.success("Agente RL treinado com sucesso!")
+                    try:
+                        # Preparar ambiente
+                        env = DummyVecEnv([lambda: BitcoinTradingEnv(data['prices'])])
+                        
+                        # Criar e treinar modelo com parâmetros mais conservadores
+                        model = PPO(
+                            'MlpPolicy', 
+                            env, 
+                            verbose=0,
+                            learning_rate=1e-4,  # Taxa de aprendizado mais baixa
+                            n_steps=1024,       # Número de passos por atualização
+                            batch_size=64,      # Tamanho do batch
+                            n_epochs=4,         # Número de épocas por atualização
+                            gamma=0.99,         # Fator de desconto
+                            gae_lambda=0.95,    # Parâmetro GAE
+                            clip_range=0.2,     # Parâmetro de clipping
+                            ent_coef=0.01,      # Coeficiente de entropia
+                            max_grad_norm=0.5   # Norma máxima do gradiente
+                        )
+                        
+                        model.learn(total_timesteps=st.session_state.user_settings['rl_episodes'])
+                        
+                        # Salvar modelo na sessão
+                        st.session_state.rl_model = model
+                        st.success("Agente RL treinado com sucesso!")
+                    except Exception as e:
+                        st.error(f"Erro ao treinar agente RL: {str(e)}")
         
         if 'rl_model' in st.session_state:
             # Simular trading
             env = BitcoinTradingEnv(data['prices'])
-            obs = env.reset()
+            obs, _ = env.reset()
             done = False
             actions = []
+            rewards = []
             
             while not done:
-                action, _states = st.session_state.rl_model.predict(obs)
-                obs, rewards, done, truncated, info = env.step(action)
+                action, _states = st.session_state.rl_model.predict(obs, deterministic=True)
+                obs, reward, done, _, info = env.step(action)
                 actions.append(action)
+                rewards.append(reward)
             
             # Mostrar resultados
             st.write(f"**Resultado Final:** ${info['total_profit']:,.2f}")
@@ -1999,10 +2018,11 @@ def main():
             action_df = pd.DataFrame({
                 'date': data['prices']['date'].iloc[:len(actions)],
                 'price': data['prices']['price'].iloc[:len(actions)],
-                'action': actions
+                'action': actions,
+                'reward': rewards
             })
             
-            fig = px.line(action_df, x='date', y='price')
+            fig = px.line(action_df, x='date', y='price', title="Ações do Agente RL")
             fig.add_scatter(
                 x=action_df['date'],
                 y=action_df['price'].where(action_df['action'] == 1),
@@ -2018,6 +2038,14 @@ def main():
                 marker=dict(color='red', size=8)
             )
             st.plotly_chart(fig, use_container_width=True)
+            
+            # Gráfico de recompensas acumuladas
+            fig_rewards = px.line(
+                x=action_df['date'],
+                y=np.cumsum(action_df['reward']),
+                title="Recompensas Acumuladas do Agente RL"
+            )
+            st.plotly_chart(fig_rewards, use_container_width=True)
     
     with tab6:
         if 'prices' not in data or data['prices'].empty:
