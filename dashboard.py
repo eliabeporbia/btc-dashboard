@@ -113,7 +113,7 @@ class BitcoinTradingEnv(gym.Env):
         obs = np.array([
             current_data['price'] / 100000,  # Normalização de preço
             current_data['volume'] / 1000000,  # Normalização de volume
-            np.clip(current_data.get('RSI_14', 50) / 100, 0, 1),  # RSI entre 0 e 1
+            np.clip(current_data.get('RSI_14', 50) / 100,  # RSI entre 0 e 1
             current_data.get('MACD', 0) / 1000,  # MACD pode ser negativo
             current_data.get('MACD_Signal', 0) / 1000,
             max(0, self.balance / self.initial_balance),  # Saldo normalizado (não negativo)
@@ -969,8 +969,14 @@ def optimize_strategy_parameters(data, strategy_name, param_space):
     
     return best_params, best_sharpe, best_results
 
+# ======================
+# FUNÇÃO PARA CARREGAR DADOS COM BOTÃO DE ATUALIZAÇÃO
+# ======================
 @st.cache_data(ttl=3600, show_spinner="Carregando dados do mercado...")
-def load_data():
+def load_cached_data():
+    return load_data_from_api()
+
+def load_data_from_api():
     data = {}
     try:
         url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=90"
@@ -1274,9 +1280,6 @@ def generate_pdf_report(data, signals, final_verdict):
     return pdf
 
 def main():
-    # Carregar dados
-    data = load_data()
-    
     # Inicializar modelos de IA
     sentiment_model = load_sentiment_model()
     
@@ -1326,8 +1329,19 @@ def main():
             st.sidebar.success("Configurações resetadas para padrão!")
             st.rerun()
     
+    # ======================
+    # BOTÃO DE ATUALIZAÇÃO DE DADOS
+    # ======================
+    st.sidebar.subheader("🔄 Atualização de Dados")
+    if st.sidebar.button("🔄 Atualizar Dados Agora"):
+        st.cache_data.clear()
+        st.rerun()
+    
     if st.sidebar.button("Ativar Monitoramento Contínuo"):
         st.sidebar.success("Alertas ativados!")
+    
+    # Carregar dados (usando cache ou forçando atualização)
+    data = load_cached_data()
     
     signals, final_verdict, buy_signals, sell_signals = generate_signals(
         data, 
