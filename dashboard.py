@@ -10,9 +10,6 @@ from fpdf import FPDF
 import yfinance as yf
 import tempfile
 import re
-import os
-os.environ["HTTP_PROXY"] = "http://seu-proxy:porta"
-os.environ["HTTPS_PROXY"] = "http://seu-proxy:porta"
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.gaussian_process import GaussianProcessRegressor
