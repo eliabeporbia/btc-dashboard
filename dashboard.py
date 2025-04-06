@@ -113,7 +113,7 @@ class BitcoinTradingEnv(gym.Env):
         obs = np.array([
             current_data['price'] / 100000,  # Normalização de preço
             current_data['volume'] / 1000000,  # Normalização de volume
-            np.clip(current_data.get('RSI_14', 50) / 100, 0, 1),  # RSI entre 0 e 1
+            np.clip(current_data.get('RSI_14', 50) / 100,  # RSI entre 0 e 1
             current_data.get('MACD', 0) / 1000,  # MACD pode ser negativo
             current_data.get('MACD_Signal', 0) / 1000,
             max(0, self.balance / self.initial_balance),  # Saldo normalizado (não negativo)
@@ -166,15 +166,23 @@ class BitcoinTradingEnv(gym.Env):
 
 @st.cache_resource
 def load_sentiment_model():
-    return pipeline(
-        "sentiment-analysis",
-        model="finiteautomata/bertweet-base-sentiment-analysis",
-        framework="pt",  # Força PyTorch
-        device="cpu"    # Remove se tiver GPU
-    )
+    try:
+        # Usando um modelo mais leve que não requer GPU
+        return pipeline(
+            "sentiment-analysis",
+            model="distilbert-base-uncased-finetuned-sst-2-english",
+            framework="pt",
+            device=-1  # Força CPU
+        )
+    except Exception as e:
+        st.error(f"Erro ao carregar modelo de sentimentos: {str(e)}")
+        return None
 
 def analyze_news_sentiment(news_list, _model):
     """Analisa o sentimento das notícias"""
+    if _model is None:
+        return []
+        
     results = []
     for news in news_list:
         try:
