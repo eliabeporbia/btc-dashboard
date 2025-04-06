@@ -1,3 +1,6 @@
+import os
+os.environ["HTTP_PROXY"] = "http://seu-proxy:porta"
+os.environ["HTTPS_PROXY"] = "http://seu-proxy:porta"
 import streamlit as st
 st.cache_resource.clear()
 import requests
