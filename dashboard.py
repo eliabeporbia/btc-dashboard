@@ -108,7 +108,7 @@ class BitcoinTradingEnv(gym.Env):
 
     def _next_observation(self):
         # Normalizar os dados para a observação com tratamento robusto
-current_data = self.df.iloc[self.current_step]
+    current_data = self.df.iloc[self.current_step]
 
 obs = np.array([
     current_data['price'] / 100000,  # Normalização de preço
