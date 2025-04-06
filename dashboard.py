@@ -16,7 +16,11 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel
 from sklearn.model_selection import ParameterGrid
 from transformers import pipeline
-file_utils.default_cache_path = "./novo_cache"  # Altera o diretório de cache
+try:
+    classifier = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+    print(classifier("I love this app!"))
+except Exception as e:
+    print(f"Erro: {e}")
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.optimizers import Adam
