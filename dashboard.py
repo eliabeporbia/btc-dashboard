@@ -108,26 +108,25 @@ class BitcoinTradingEnv(gym.Env):
 
     def _next_observation(self):
         # Normalizar os dados para a observação com tratamento robusto
-        current_data = self.df.iloc[self.current_step]
-        
-        obs = np.array([
-            current_data['price'] / 100000,  # Normalização de preço
-            current_data['volume'] / 1000000,  # Normalização de volume
-            np.clip(current_data.get('RSI_14', 50) / 100,  # RSI entre 0 e 1
-            current_data.get('MACD', 0) / 1000,  # MACD pode ser negativo
-            current_data.get('MACD_Signal', 0) / 1000,
-            max(0, self.balance / self.initial_balance),  # Saldo normalizado (não negativo)
-            max(0, self.btc_held * current_data['price'] / self.initial_balance),  # Valor BTC normalizado
-            np.clip(self.current_step / len(self.df), 0, 1),  # Progresso entre 0 e 1
-            current_data.get('BB_Upper_20', 0) / 100000,
-            current_data.get('BB_Lower_20', 0) / 100000
-        ], dtype=np.float32)
+current_data = self.df.iloc[self.current_step]
 
-        
-        # Garantir que não há NaN ou infinitos
-        obs = np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=0.0)
-        
-        return obs
+obs = np.array([
+    current_data['price'] / 100000,  # Normalização de preço
+    current_data['volume'] / 1000000,  # Normalização de volume
+    np.clip(current_data.get('RSI_14', 50) / 100, 0, 1),  # RSI entre 0 e 1 (corrigido)
+    current_data.get('MACD', 0) / 1000,  # MACD pode ser negativo
+    current_data.get('MACD_Signal', 0) / 1000,
+    max(0, self.balance / self.initial_balance),  # Saldo normalizado (não negativo)
+    max(0, self.btc_held * current_data['price'] / self.initial_balance),  # Valor BTC normalizado
+    np.clip(self.current_step / len(self.df), 0, 1),  # Progresso entre 0 e 1 (também corrigido)
+    current_data.get('BB_Upper_20', 0) / 100000,
+    current_data.get('BB_Upper_20', 0) / 100000
+], dtype=np.float32)
+
+# Garantir que não há NaN ou infinitos
+obs = np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=0.0)
+
+return obs
     
     def step(self, action):
         current_price = self.df.iloc[self.current_step]['price']
