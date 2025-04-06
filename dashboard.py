@@ -1,4 +1,5 @@
 import streamlit as st
+st.cache_resource.clear()
 import requests
 import pandas as pd
 import numpy as np
