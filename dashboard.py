@@ -106,8 +106,6 @@ class BitcoinTradingEnv(gym.Env):
         info = {}
         return obs, info
 
-    def _next_observation(self):
-        # Normalizar os dados para a observação com tratamento robusto
 def _next_observation(self):
     # Normalizar os dados para a observação com tratamento robusto
     current_data = self.df.iloc[self.current_step]  # ← ESTA LINHA PRECISA ESTAR INDENTADA!
