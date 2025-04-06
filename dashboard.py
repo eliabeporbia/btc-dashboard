@@ -16,6 +16,7 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel
 from sklearn.model_selection import ParameterGrid
 from transformers import pipeline
+file_utils.default_cache_path = "./novo_cache"  # Altera o diretório de cache
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.optimizers import Adam
