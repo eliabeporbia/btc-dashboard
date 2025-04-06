@@ -10,11 +10,6 @@ from fpdf import FPDF
 import yfinance as yf
 import tempfile
 import re
-import os
-if not os.path.exists("model_cache"):
-    os.makedirs("model_cache")
-    from transformers import pipeline
-    pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english", cache_dir="model_cache")
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.gaussian_process import GaussianProcessRegressor
