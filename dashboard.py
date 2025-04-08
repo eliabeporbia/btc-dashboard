@@ -56,7 +56,7 @@ except ImportError: st.warning("PyTorch não encontrado.")
 # CONSTANTES E CONFIGS
 # ======================
 st.set_page_config(layout="wide", page_title="BTC AI Dashboard Pro+")
-st.title("🚀 BTC AI Dashboard Pro+ v2.3 - Indentação Final") # Versão incrementada
+st.title("🚀 BTC AI Dashboard Pro+ v2.3 - Final") # Versão incrementada
 
 # Arquivos e Diretórios
 BASE_DIR = os.path.dirname(os.path.abspath(__file__)); MODEL_DIR = os.path.join(BASE_DIR, "saved_models"); os.makedirs(MODEL_DIR, exist_ok=True)
@@ -119,7 +119,7 @@ def load_sentiment_model():
     try: return pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english", framework="pt", device=-1)
     except Exception as e: st.error(f"Erro load Sentimento (pt): {e}"); return None
 
-def analyze_news_sentiment(news_list, _model): # Mantida
+def analyze_news_sentiment(news_list, _model):
     if _model is None: return news_list;
     if not news_list: return []; results = []
     for news in news_list:
@@ -133,7 +133,7 @@ def analyze_news_sentiment(news_list, _model): # Mantida
 
 # --- Funções LSTM ---
 @st.cache_resource
-def create_lstm_architecture(input_shape, units=50): # Mantida
+def create_lstm_architecture(input_shape, units=50):
     if not TF_AVAILABLE: return None
     try: from tf_keras.models import Sequential; from tf_keras.layers import LSTM, Dense, Dropout; from tf_keras.optimizers import Adam
     except ImportError: from tensorflow.keras.models import Sequential; from tensorflow.keras.layers import LSTM, Dense, Dropout; from tensorflow.keras.optimizers import Adam
@@ -141,7 +141,7 @@ def create_lstm_architecture(input_shape, units=50): # Mantida
     model.compile(optimizer=Adam(learning_rate=0.001), loss='mean_squared_error'); return model
 
 @st.cache_resource(show_spinner="Verificando modelo LSTM treinado...")
-def load_lstm_model_and_scaler(): # Mantida
+def load_lstm_model_and_scaler():
     model, scaler = None, None
     if TF_AVAILABLE and os.path.exists(LSTM_MODEL_PATH) and os.path.exists(LSTM_SCALER_PATH):
         try:
@@ -153,7 +153,7 @@ def load_lstm_model_and_scaler(): # Mantida
         except Exception as e: st.error(f"Erro ao carregar LSTM: {e}"); model, scaler = None, None
     return model, scaler
 
-def train_and_save_lstm(data_prices, window, epochs, units): # Mantida
+def train_and_save_lstm(data_prices, window, epochs, units):
     if not TF_AVAILABLE or not SKLEARN_AVAILABLE: st.error("TF/Keras ou SKlearn ausente."); return False
     price_data = data_prices['price'].dropna().values.reshape(-1, 1)
     if len(price_data) < window + 1: st.error(f"Dados insuficientes LSTM ({len(price_data)}<{window+1})."); return False
@@ -176,7 +176,7 @@ def train_and_save_lstm(data_prices, window, epochs, units): # Mantida
         return True
     except Exception as e: st.error(f"Erro treino/save LSTM: {e}"); return False
 
-def predict_with_lstm(model, scaler, data_prices, window): # Mantida
+def predict_with_lstm(model, scaler, data_prices, window):
     if model is None or scaler is None: return None
     try:
         last_window_data = data_prices['price'].dropna().values[-window:]
@@ -337,7 +337,7 @@ def get_traditional_assets():
             data_yf = yf.download(ticker, start=start_date, end=end_date, interval="1d", progress=False)
             # *** CORREÇÃO APLICADA AQUI: Indentação correta do IF ***
             if not data_yf.empty and 'Close' in data_yf.columns:
-                data_proc = data_yf['Close'].resample('1D').ffill().to_frame() # Usa variável diferente
+                data_proc = data_yf['Close'].resample('1D').ffill().to_frame()
                 data_proc = data_proc.reset_index().rename(columns={'Close': 'value', 'Date': 'date'})
                 data_proc['date'] = pd.to_datetime(data_proc['date']).dt.normalize()
                 data_proc['asset'] = name
@@ -345,8 +345,9 @@ def get_traditional_assets():
             # *** FIM DA CORREÇÃO ***
         except Exception as e:
             st.warning(f"Falha ao buscar {name} ({ticker}): {e}")
-            # Não adiciona nada a dfs se houver erro
+            # Continua para o próximo ativo se houver erro
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+
 
 # --- Funções Backtesting ---
 def calculate_daily_returns(df): # ... (mantida) ...
@@ -465,28 +466,25 @@ def optimize_strategy_parameters(data, strategy_name, param_space): # ... (manti
     else: st.warning("Nenhuma combinação válida.")
     return best_params, best_sharpe, best_results_df
 
-# --- Carregamento de Dados (com correção erro tuple) ---
+# --- Carregamento de Dados ---
 @st.cache_data(ttl=3600, show_spinner="Carregando e processando dados de mercado...")
 def load_and_process_data():
-    data = {'prices': pd.DataFrame()} # Inicia com DF vazio
+    data = {'prices': pd.DataFrame()}
     try:
         ticker = "BTC-USD"; btc_data_raw = yf.download(ticker, period="1y", interval="1d", progress=False)
         if not isinstance(btc_data_raw, pd.DataFrame) or btc_data_raw.empty: raise ValueError(f"yfinance não retornou DataFrame para {ticker}.")
         btc_data = btc_data_raw.copy()
-        # --- CORREÇÃO ERRO TUPLE / COLUNAS ---
         column_map = {'open': ['Open', 'open'],'high': ['High', 'high'],'low': ['Low', 'low'],'close': ['Close', 'close'],'volume': ['Volume', 'volume']}
         renamed_cols = {}; found_cols = {}
         for standard_name, possible_names in column_map.items():
-            for possible_name in btc_data.columns: # Itera sobre colunas existentes
-                col_str = possible_name[0] if isinstance(possible_name, tuple) else possible_name
-                if isinstance(col_str, str) and col_str.lower() == standard_name: renamed_cols[possible_name] = standard_name; found_cols[standard_name] = True; break
+            for possible_name in btc_data.columns: col_str = possible_name[0] if isinstance(possible_name, tuple) else possible_name
+            if isinstance(col_str, str) and col_str.lower() == standard_name: renamed_cols[possible_name] = standard_name; found_cols[standard_name] = True; break
         btc_data.rename(columns=renamed_cols, inplace=True)
         if not found_cols.get('close'): adj_close_cols = [c for c in btc_data.columns if isinstance(c, str) and c.lower().replace(' ','') == 'adjclose'];
         if adj_close_cols: btc_data.rename(columns={adj_close_cols[0]: 'close'}, inplace=True); found_cols['close'] = True
         required_ohlcv = ['open', 'high', 'low', 'close', 'volume']
         missing_cols = [col for col in required_ohlcv if col not in btc_data.columns]
         if missing_cols: raise ValueError(f"Colunas OHLCV ausentes: {missing_cols}. Disponíveis: {list(btc_data.columns)}")
-        # --- FIM CORREÇÃO COLUNAS ---
         btc_data.reset_index(inplace=True); date_col = 'Date' if 'Date' in btc_data.columns else 'index' if 'index' in btc_data.columns else None
         if not date_col: raise ValueError("Coluna Date/index não encontrada.")
         btc_data.rename(columns={date_col: 'date'}, inplace=True)
@@ -528,7 +526,7 @@ def load_and_process_data():
         data = {'prices': pd.DataFrame(), 'hashrate': pd.DataFrame(), 'difficulty': pd.DataFrame(), 'exchanges_simulated': pd.DataFrame(), 'whale_alert_simulated': pd.DataFrame(), 'news': [], 'support_resistance': []}
     return data
 
-# --- Geração de Sinais V2 (Com correção SyntaxError) ---
+# --- Geração de Sinais V2 ---
 def generate_signals_v2(data, settings, lstm_prediction=None, rl_action=None):
     signals = []; buy_score, sell_score, neutral_score = 0.0, 0.0, 0.0
     df = data.get('prices', pd.DataFrame());
@@ -609,8 +607,16 @@ def generate_pdf_report(data, signals, final_verdict, settings): # Mantida
     if sr_levels: pdf.multi_cell(0, 5, txt=", ".join([f"${lvl:,.0f}" for lvl in sr_levels]))
     else: pdf.cell(0, 5, txt="- Nenhuma zona identificada.", ln=1)
     pdf.ln(5); pdf.set_font("Arial", 'I', 8); pdf.ln(10); pdf.multi_cell(0, 4, txt=clean_text("Disclaimer: Relatório gerado automaticamente apenas para fins informativos. Não constitui aconselhamento financeiro."))
-    try: with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp: pdf_output_path = tmp.name; pdf.output(pdf_output_path); return pdf_output_path
-    except Exception as e: st.error(f"Erro salvar PDF: {e}"); return None
+    try:
+        # *** CORREÇÃO SyntaxError: Bloco try agora tem conteúdo indentado ***
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            pdf_output_path = tmp.name
+            pdf.output(pdf_output_path) # Gera o PDF no arquivo temporário
+            return pdf_output_path # Retorna o caminho do arquivo
+        # *** FIM DA CORREÇÃO ***
+    except Exception as e:
+        st.error(f"Erro ao salvar PDF: {e}")
+        return None
 
 # ======================
 # |||| LOOP PRINCIPAL ||||
@@ -633,7 +639,7 @@ def main():
 
     # --- Sidebar ---
     with st.sidebar:
-        st.header("⚙️ Painel de Controle AI v2.2")
+        st.header("⚙️ Painel de Controle AI v2.3") # Versão incrementada
         with st.expander("🧠 Config IA", expanded=False):
             settings['lstm_window'] = st.slider("Janela LSTM", 30, 120, settings['lstm_window'], 10, key='sl_lstm_w')
             settings['lstm_epochs'] = st.slider("Épocas LSTM", 10, 100, settings['lstm_epochs'], 10, key='sl_lstm_e')
@@ -686,7 +692,7 @@ def main():
     filtered_news = filter_news_by_confidence(analyzed_news, settings['min_confidence'])
 
     # --- Layout Principal ---
-    st.header("📊 Painel Integrado BTC AI Pro+ v2.2")
+    st.header("📊 Painel Integrado BTC AI Pro+ v2.3")
     # Métricas
     mcol1, mcol2, mcol3, mcol4, mcol5 = st.columns(5)
     last_price_val = master_data['prices']['price'].iloc[-1] if not master_data['prices'].empty else None
