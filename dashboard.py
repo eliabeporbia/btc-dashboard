@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
-# ↑↑↑ Adicionado para garantir codificação correta ↑↑↑
-
 import streamlit as st
-# st.cache_resource.clear() # Comente ou remova para produção para usar cache
+# st.cache_resource.clear() # Comente/remova para produção
 
 import requests
 import pandas as pd
@@ -14,80 +12,56 @@ from fpdf import FPDF
 import yfinance as yf
 import tempfile
 import re
-import os # Para verificar existência de arquivos
-import joblib # Para salvar/carregar objetos Python (scalers)
+import os
+import joblib
 import warnings
 
-# Ignorar alguns warnings comuns de bibliotecas
+# Ignorar warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning, module='stable_baselines3')
 warnings.filterwarnings("ignore", category=UserWarning, module='tensorflow')
 
-
-# --- Importações de ML/IA com Verificação ---
+# --- Importações ML/IA ---
 SKLEARN_AVAILABLE = False
+try: from sklearn.preprocessing import MinMaxScaler, StandardScaler; from sklearn.cluster import KMeans; from sklearn.gaussian_process import GaussianProcessRegressor; from sklearn.gaussian_process.kernels import RBF, ConstantKernel, WhiteKernel; from sklearn.model_selection import ParameterGrid; SKLEARN_AVAILABLE = True
+except ImportError: st.warning("Scikit-learn não encontrado.")
+TRANSFORMERS_AVAILABLE = False; ACCELERATE_AVAILABLE = False
 try:
-    from sklearn.preprocessing import MinMaxScaler, StandardScaler
-    from sklearn.cluster import KMeans
-    from sklearn.gaussian_process import GaussianProcessRegressor
-    from sklearn.gaussian_process.kernels import RBF, ConstantKernel, WhiteKernel
-    from sklearn.model_selection import ParameterGrid
-    SKLEARN_AVAILABLE = True
-except ImportError:
-    st.warning("Scikit-learn não encontrado ('pip install scikit-learn'). Funcionalidades limitadas.")
-
-TRANSFORMERS_AVAILABLE = False
-ACCELERATE_AVAILABLE = False
-try:
-    from transformers import pipeline
-    TRANSFORMERS_AVAILABLE = True
-    try:
-        import accelerate # Verifica se accelerate está instalado
-        ACCELERATE_AVAILABLE = True
-    except ImportError:
-        st.warning("Accelerate não encontrado ('pip install accelerate'). Pode impactar performance/carregamento do Transformers.")
-except ImportError: st.warning("Transformers não encontrado. Análise de sentimento desativada.")
-except ValueError as e: # Captura erro Keras 3
-    if "Your currently installed version of Keras is Keras 3" in str(e): st.error("Erro Keras 3 com Transformers TF. Instale 'tf-keras' ou use backend PyTorch. Análise sentimento desativada.")
-    else: st.warning(f"Erro import Transformers: {e}. Análise sentimento desativada.")
+    from transformers import pipeline; TRANSFORMERS_AVAILABLE = True
+    try: import accelerate; ACCELERATE_AVAILABLE = True
+    except ImportError: st.warning("Accelerate não encontrado.")
+except ImportError: st.warning("Transformers não encontrado.")
+except ValueError as e:
+    if "Keras is Keras 3" in str(e): st.error("Erro Keras 3/Transformers TF. Use 'tf-keras'.")
+    else: st.warning(f"Erro import Transformers: {e}.")
     TRANSFORMERS_AVAILABLE = False
-
 TF_AVAILABLE = False
 try:
     try: from tf_keras.models import Sequential, load_model; from tf_keras.layers import LSTM, Dense, Dropout; from tf_keras.optimizers import Adam
     except ImportError: from tensorflow.keras.models import Sequential, load_model; from tensorflow.keras.layers import LSTM, Dense, Dropout; from tensorflow.keras.optimizers import Adam
-    import tensorflow as tf
-    TF_AVAILABLE = True
+    import tensorflow as tf; TF_AVAILABLE = True
 except ImportError: st.warning("TensorFlow/Keras ou tf-keras não encontrado. LSTM desativado.")
 except Exception as e: st.warning(f"Erro import TF/Keras: {e}. LSTM desativado.")
-
 SB3_AVAILABLE = False
 try: from stable_baselines3 import PPO; from stable_baselines3.common.env_checker import check_env; from stable_baselines3.common.vec_env import DummyVecEnv; from stable_baselines3.common.callbacks import BaseCallback; SB3_AVAILABLE = True
 except ImportError: st.warning("Stable-Baselines3 não encontrado. RL desativado.")
-
 GYM_AVAILABLE = False
 try: import gymnasium as gym; from gymnasium import spaces; GYM_AVAILABLE = True
 except ImportError: st.warning("Gymnasium não encontrado. RL desativado.")
-
 TORCH_AVAILABLE = False
 try: import torch; TORCH_AVAILABLE = True
-except ImportError: st.warning("PyTorch não encontrado. Pode afetar Transformers ou RL.")
+except ImportError: st.warning("PyTorch não encontrado.")
 
 # ======================
 # CONSTANTES E CONFIGS
 # ======================
 st.set_page_config(layout="wide", page_title="BTC AI Dashboard Pro+")
-st.title("🚀 BTC AI Dashboard Pro+ v2.2 - Harmonizado")
+st.title("🚀 BTC AI Dashboard Pro+ v2.3 - Indentação Final") # Versão incrementada
 
 # Arquivos e Diretórios
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_DIR = os.path.join(BASE_DIR, "saved_models")
-os.makedirs(MODEL_DIR, exist_ok=True)
-LSTM_MODEL_PATH = os.path.join(MODEL_DIR, "lstm_btc_model.keras")
-LSTM_SCALER_PATH = os.path.join(MODEL_DIR, "lstm_btc_scaler.joblib")
-RL_MODEL_PATH = os.path.join(MODEL_DIR, "rl_ppo_btc_model.zip")
-RL_SCALER_PATH = os.path.join(MODEL_DIR, "rl_observation_scaler.joblib")
-RL_ENV_CONFIG_PATH = os.path.join(MODEL_DIR, "rl_env_config.joblib")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__)); MODEL_DIR = os.path.join(BASE_DIR, "saved_models"); os.makedirs(MODEL_DIR, exist_ok=True)
+LSTM_MODEL_PATH = os.path.join(MODEL_DIR, "lstm_btc_model.keras"); LSTM_SCALER_PATH = os.path.join(MODEL_DIR, "lstm_btc_scaler.joblib")
+RL_MODEL_PATH = os.path.join(MODEL_DIR, "rl_ppo_btc_model.zip"); RL_SCALER_PATH = os.path.join(MODEL_DIR, "rl_observation_scaler.joblib"); RL_ENV_CONFIG_PATH = os.path.join(MODEL_DIR, "rl_env_config.joblib")
 
 # Pesos e Configs Padrão
 INDICATOR_WEIGHTS = { 'order_blocks': 2.0, 'gaussian_process': 1.5, 'rsi': 1.5, 'macd': 1.3, 'bollinger': 1.2, 'volume': 1.0, 'obv': 1.0, 'stochastic': 1.1, 'ma_cross': 1.0, 'lstm_pred': 1.8, 'rl_action': 2.0, 'sentiment': 1.2, 'divergence': 1.2 }
@@ -145,7 +119,7 @@ def load_sentiment_model():
     try: return pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english", framework="pt", device=-1)
     except Exception as e: st.error(f"Erro load Sentimento (pt): {e}"); return None
 
-def analyze_news_sentiment(news_list, _model): # Mantida com correção
+def analyze_news_sentiment(news_list, _model): # Mantida
     if _model is None: return news_list;
     if not news_list: return []; results = []
     for news in news_list:
@@ -353,12 +327,25 @@ def get_market_sentiment(): # ... (mantida) ...
 def filter_news_by_confidence(news_data, min_confidence=0.7): # ... (mantida) ...
     if not isinstance(news_data, list): return []
     return [news for news in news_data if news.get('confidence', news.get('sentiment_score', 0)) >= min_confidence]
-def get_traditional_assets(): # ... (mantida com correção) ...
-    assets = {"BTC-USD": "BTC-USD", "S&P 500": "^GSPC", "Ouro": "GC=F", "ETH-USD": "ETH-USD"}; dfs = []; end_date = datetime.now(); start_date = end_date - timedelta(days=95)
+
+# --- Função get_traditional_assets (CORRIGIDA) ---
+def get_traditional_assets():
+    assets = {"BTC-USD": "BTC-USD", "S&P 500": "^GSPC", "Ouro": "GC=F", "ETH-USD": "ETH-USD"}
+    dfs = []; end_date = datetime.now(); start_date = end_date - timedelta(days=95)
     for name, ticker in assets.items():
-        try: data = yf.download(ticker, start=start_date, end=end_date, interval="1d", progress=False);
-        if not data.empty and 'Close' in data.columns: data = data['Close'].resample('1D').ffill().to_frame(); data = data.reset_index().rename(columns={'Close': 'value', 'Date': 'date'}); data['date'] = pd.to_datetime(data['date']).dt.normalize(); data['asset'] = name; dfs.append(data.tail(90))
-        except Exception as e: st.warning(f"Falha buscar {name}: {e}")
+        try:
+            data_yf = yf.download(ticker, start=start_date, end=end_date, interval="1d", progress=False)
+            # *** CORREÇÃO APLICADA AQUI: Indentação correta do IF ***
+            if not data_yf.empty and 'Close' in data_yf.columns:
+                data_proc = data_yf['Close'].resample('1D').ffill().to_frame() # Usa variável diferente
+                data_proc = data_proc.reset_index().rename(columns={'Close': 'value', 'Date': 'date'})
+                data_proc['date'] = pd.to_datetime(data_proc['date']).dt.normalize()
+                data_proc['asset'] = name
+                dfs.append(data_proc.tail(90))
+            # *** FIM DA CORREÇÃO ***
+        except Exception as e:
+            st.warning(f"Falha ao buscar {name} ({ticker}): {e}")
+            # Não adiciona nada a dfs se houver erro
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 
 # --- Funções Backtesting ---
