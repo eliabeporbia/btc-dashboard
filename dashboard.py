@@ -99,14 +99,33 @@ RL_OBSERVATION_COLS_NORM = [f'{col}_norm' for col in RL_OBSERVATION_COLS_BASE]
 # FUNÇÕES AUXILIARES E CLASSES
 # ======================
 
-# --- Callback SB3 ---
+# --- Callback para Feedback SB3 (CORRIGIDO) ---
 class ProgressBarCallback(BaseCallback):
-    def __init__(self, total_timesteps: int, progress_bar, status_text, verbose=0): super().__init__(verbose); self.total_timesteps = total_timesteps; self.progress_bar = progress_bar; self.status_text = status_text; self.current_step = 0
-    def _on_step(self) -> bool: self.current_step = self.model.num_timesteps; progress = self.current_step / self.total_timesteps; reward_str = "";
-    if self.model.ep_info_buffer and len(self.model.ep_info_buffer) > 0:
-        try: reward_str = f"| R Média: {np.mean([ep_info['r'] for ep_info in self.model.ep_info_buffer]):.3f}"
-        except: pass
-    self.status_text.text(f"Treinando RL: {self.current_step}/{self.total_timesteps} {reward_str}"); self.progress_bar.progress(progress); return True
+    """Callback para mostrar progresso do treino SB3 no Streamlit."""
+    def __init__(self, total_timesteps: int, progress_bar, status_text, verbose=0):
+        super().__init__(verbose)
+        self.total_timesteps = total_timesteps
+        self.progress_bar = progress_bar
+        self.status_text = status_text
+        self.current_step = 0
+
+    # *** CORREÇÃO DE INDENTAÇÃO APLICADA AQUI ***
+    def _on_step(self) -> bool:
+        # Este bloco inteiro deve estar indentado em relação a 'class ProgressBarCallback'
+        self.current_step = self.model.num_timesteps
+        progress = self.current_step / self.total_timesteps
+        reward_str = ""
+        if self.model.ep_info_buffer and len(self.model.ep_info_buffer) > 0:
+            try:
+                reward_str = f"| R Média: {np.mean([ep_info['r'] for ep_info in self.model.ep_info_buffer]):.3f}"
+            except Exception: # Captura genérica se houver problema no buffer
+                pass
+        # Atualiza o texto e a barra de progresso
+        self.status_text.text(f"Treinando RL: {self.current_step}/{self.total_timesteps} {reward_str}")
+        self.progress_bar.progress(progress)
+        # Esta linha 'return True' deve estar indentada no mesmo nível das linhas acima dentro do _on_step
+        return True # Continua o treinamento
+    # *** FIM DA CORREÇÃO DE INDENTAÇÃO ***
 
 # --- Ambiente RL ---
 if GYM_AVAILABLE and SKLEARN_AVAILABLE:
@@ -143,31 +162,17 @@ def load_sentiment_model():
     try: return pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english", framework="pt", device=-1)
     except Exception as e: st.error(f"Erro load Sentimento (pt): {e}"); return None
 
-# --- CORREÇÃO SyntaxError ---
-def analyze_news_sentiment(news_list, _model):
-    if _model is None: return news_list
-    if not news_list: return []
-    results = []
+def analyze_news_sentiment(news_list, _model): # Mantida
+    if _model is None: return news_list;
+    if not news_list: return []; results = []
     for news in news_list:
-        news['sentiment'] = 'NEUTRAL'
-        news['sentiment_score'] = 0.5
+        news['sentiment'] = 'NEUTRAL'; news['sentiment_score'] = 0.5
         try:
             text = news.get('title', '')
-            if text:
-                result = _model(text[:512])[0]
-                news['sentiment'] = result['label']
-                news['sentiment_score'] = result['score'] if result['label'] == 'POSITIVE' else (1 - result['score'])
-            # 'append' sempre ocorre, dentro do try
-            results.append(news)
-        except Exception as e:
-            # Bloco except agora existe
-            st.warning(f"Erro ao analisar sentimento da notícia '{news.get('title', 'N/A')}': {e}")
-            # Adiciona a notícia mesmo se a análise falhar, mas com valores padrão
-            results.append(news)
-            # Continue não é necessário aqui, o loop prosseguirá
+            if text: result = _model(text[:512])[0]; news['sentiment'] = result['label']; news['sentiment_score'] = result['score'] if result['label'] == 'POSITIVE' else (1 - result['score'])
+            results.append(news) # Append dentro do try
+        except Exception as e: st.warning(f"Erro análise sentimento: {e}"); results.append(news) # Append mesmo com erro
     return results
-# --- FIM DA CORREÇÃO ---
-
 
 # --- Funções LSTM ---
 @st.cache_resource
@@ -185,9 +190,7 @@ def load_lstm_model_and_scaler(): # Mantida
         try:
              try: from tf_keras.models import load_model as load_model_tfk
              except ImportError: from tensorflow.keras.models import load_model as load_model_tfk
-             # Adiciona compile=False para evitar problemas com otimizador salvo
              model = load_model_tfk(LSTM_MODEL_PATH, compile=False)
-             # Recompila com um otimizador simples se necessário para previsão
              if not model.optimizer: model.compile(optimizer=Adam(learning_rate=0.001), loss='mean_squared_error')
              scaler = joblib.load(LSTM_SCALER_PATH)
         except Exception as e: st.error(f"Erro ao carregar LSTM: {e}"); model, scaler = None, None
@@ -227,11 +230,7 @@ def predict_with_lstm(model, scaler, data_prices, window): # Mantida
         return scaler.inverse_transform(pred_scaled)[0][0]
     except Exception: return None
 
-# --- Funções Indicadores Técnicos (Colar aqui) ---
-# calculate_ema, calculate_rsi, calculate_macd, calculate_bollinger_bands,
-# calculate_obv, calculate_stochastic, calculate_gaussian_process,
-# identify_order_blocks, plot_order_blocks, detect_support_resistance_clusters,
-# detect_divergences
+# --- Funções Indicadores Técnicos ---
 def calculate_ema(series, window):
     if not isinstance(series, pd.Series) or series.empty: return pd.Series(dtype=np.float64)
     return series.dropna().ewm(span=window, adjust=False).mean().reindex(series.index)
@@ -371,26 +370,13 @@ def get_market_sentiment(): # ... (mantida) ...
 def filter_news_by_confidence(news_data, min_confidence=0.7): # ... (mantida) ...
     if not isinstance(news_data, list): return []
     return [news for news in news_data if news.get('confidence', news.get('sentiment_score', 0)) >= min_confidence]
-
-# --- Função get_traditional_assets (Com correção erro Syntax) ---
-def get_traditional_assets():
-    assets = {"BTC-USD": "BTC-USD", "S&P 500": "^GSPC", "Ouro": "GC=F", "ETH-USD": "ETH-USD"}
-    dfs = []; end_date = datetime.now(); start_date = end_date - timedelta(days=95)
+def get_traditional_assets(): # ... (mantida com correção) ...
+    assets = {"BTC-USD": "BTC-USD", "S&P 500": "^GSPC", "Ouro": "GC=F", "ETH-USD": "ETH-USD"}; dfs = []; end_date = datetime.now(); start_date = end_date - timedelta(days=95)
     for name, ticker in assets.items():
-        try:
-            data = yf.download(ticker, start=start_date, end=end_date, interval="1d", progress=False)
-            # *** CORREÇÃO APLICADA AQUI ***
-            if not data.empty and 'Close' in data.columns:
-                data = data['Close'].resample('1D').ffill().to_frame()
-                data = data.reset_index().rename(columns={'Close': 'value', 'Date': 'date'})
-                data['date'] = pd.to_datetime(data['date']).dt.normalize()
-                data['asset'] = name
-                dfs.append(data.tail(90))
-            # *** FIM DA CORREÇÃO ***
-        except Exception as e:
-            st.warning(f"Falha ao buscar {name} ({ticker}): {e}")
+        try: data = yf.download(ticker, start=start_date, end=end_date, interval="1d", progress=False);
+        if not data.empty and 'Close' in data.columns: data = data['Close'].resample('1D').ffill().to_frame(); data = data.reset_index().rename(columns={'Close': 'value', 'Date': 'date'}); data['date'] = pd.to_datetime(data['date']).dt.normalize(); data['asset'] = name; dfs.append(data.tail(90))
+        except Exception as e: st.warning(f"Falha buscar {name}: {e}")
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
-
 
 # --- Funções Backtesting ---
 def calculate_daily_returns(df): # ... (mantida) ...
@@ -509,7 +495,7 @@ def optimize_strategy_parameters(data, strategy_name, param_space): # ... (manti
     else: st.warning("Nenhuma combinação válida.")
     return best_params, best_sharpe, best_results_df
 
-# --- Carregamento de Dados Refatorado (com correção erro tuple) ---
+# --- Carregamento de Dados (com correção erro tuple) ---
 @st.cache_data(ttl=3600, show_spinner="Carregando e processando dados de mercado...")
 def load_and_process_data():
     data = {'prices': pd.DataFrame()} # Inicia com DF vazio
@@ -521,19 +507,12 @@ def load_and_process_data():
         column_map = {'open': ['Open', 'open'],'high': ['High', 'high'],'low': ['Low', 'low'],'close': ['Close', 'close'],'volume': ['Volume', 'volume']}
         renamed_cols = {}; found_cols = {}
         for standard_name, possible_names in column_map.items():
-            for possible_name in btc_data.columns: # Itera sobre colunas existentes
-                # Compara nomes ignorando case
-                if isinstance(possible_name, str) and possible_name.lower() == standard_name:
-                    renamed_cols[possible_name] = standard_name
-                    found_cols[standard_name] = True
-                    break
-                # Tratamento básico de tupla (primeiro nível)
-                elif isinstance(possible_name, tuple) and len(possible_name) > 0 and isinstance(possible_name[0], str) and possible_name[0].lower() == standard_name:
-                     renamed_cols[possible_name] = standard_name
-                     found_cols[standard_name] = True
-                     break
+            for possible_name in btc_data.columns:
+                col_str = possible_name[0] if isinstance(possible_name, tuple) else possible_name
+                if isinstance(col_str, str) and col_str.lower() == standard_name:
+                    renamed_cols[possible_name] = standard_name; found_cols[standard_name] = True; break
         btc_data.rename(columns=renamed_cols, inplace=True)
-        if not found_cols.get('close'): # Fallback Adj Close
+        if not found_cols.get('close'):
              adj_close_cols = [c for c in btc_data.columns if isinstance(c, str) and c.lower().replace(' ','') == 'adjclose']
              if adj_close_cols: btc_data.rename(columns={adj_close_cols[0]: 'close'}, inplace=True); found_cols['close'] = True
         required_ohlcv = ['open', 'high', 'low', 'close', 'volume']
@@ -649,33 +628,22 @@ def clean_text(text): # Mantida
     try: text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]', '', str(text)); return str(text).encode('latin-1', 'ignore').decode('latin-1')
     except: return re.sub(r'[^\x20-\x7E]+', '', str(text))
 def generate_pdf_report(data, signals, final_verdict, settings): # Mantida
-    pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", 'B', 16)
-    pdf.cell(0, 10, txt="Relatório BTC AI Dashboard Pro+ v2.1", ln=1, align='C'); pdf.ln(5)
+    pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", 'B', 16); pdf.cell(0, 10, txt="Relatório BTC AI Dashboard Pro+ v2.1", ln=1, align='C'); pdf.ln(5)
     pdf.set_font("Arial", size=10); pdf.cell(0, 5, txt=f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", ln=1, align='C'); pdf.ln(10)
-    pdf.set_font("Arial", 'B', 12)
-    current_price = data.get('prices', pd.DataFrame()).iloc[-1].get('price', 'N/A')
-    price_txt = f"${current_price:,.2f}" if isinstance(current_price, (float, int)) else "Indisponível"
-    pdf.cell(0, 7, txt=f"Preço Atual BTC/USD: {price_txt}", ln=1)
-    pdf.cell(0, 7, txt=f"Sinal Consolidado Atual: {clean_text(final_verdict)}", ln=1); pdf.ln(5)
-    pdf.set_font("Arial", 'B', 11); pdf.cell(0, 7, txt="Configurações Principais:", ln=1)
-    pdf.set_font("Arial", size=9)
-    settings_text = f"- RSI:{settings.get('rsi_window','N/A')}, BB:{settings.get('bb_window','N/A')}, MAs:{settings.get('ma_windows', 'N/A')}\n" \
-                    f"- OB Swing:{settings.get('ob_swing_length','N/A')}, Clusters:{settings.get('n_clusters','N/A')}, GP Win:{settings.get('gp_window','N/A')}\n" \
-                    f"- LSTM Win:{settings.get('lstm_window','N/A')}, RL Steps:{settings.get('rl_total_timesteps','N/A')}"
-    pdf.multi_cell(0, 5, txt=clean_text(settings_text)); pdf.ln(5)
-    pdf.set_font("Arial", 'B', 11); pdf.cell(0, 7, txt="Sinais Individuais:", ln=1)
-    pdf.set_font("Arial", size=9)
+    pdf.set_font("Arial", 'B', 12); current_price = data.get('prices', pd.DataFrame()).iloc[-1].get('price', 'N/A'); price_txt = f"${current_price:,.2f}" if isinstance(current_price, (float, int)) else "Indisponível"
+    pdf.cell(0, 7, txt=f"Preço Atual BTC/USD: {price_txt}", ln=1); pdf.cell(0, 7, txt=f"Sinal Consolidado Atual: {clean_text(final_verdict)}", ln=1); pdf.ln(5)
+    pdf.set_font("Arial", 'B', 11); pdf.cell(0, 7, txt="Configurações Principais:", ln=1); pdf.set_font("Arial", size=9)
+    settings_text = f"- RSI:{settings.get('rsi_window','N/A')}, BB:{settings.get('bb_window','N/A')}, MAs:{settings.get('ma_windows', 'N/A')}\n- OB Swing:{settings.get('ob_swing_length','N/A')}, Clusters:{settings.get('n_clusters','N/A')}, GP Win:{settings.get('gp_window','N/A')}\n- LSTM Win:{settings.get('lstm_window','N/A')}, RL Steps:{settings.get('rl_total_timesteps','N/A')}"
+    pdf.multi_cell(0, 5, txt=clean_text(settings_text)); pdf.ln(5); pdf.set_font("Arial", 'B', 11); pdf.cell(0, 7, txt="Sinais Individuais:", ln=1); pdf.set_font("Arial", size=9)
     if signals:
         for signal in signals: c_name=clean_text(signal.get('name','N/A')); c_val=clean_text(signal.get('signal','N/A')); c_det=clean_text(str(signal.get('value',''))); w=signal.get('weight',0); s=signal.get('score',0); pdf.cell(0, 5, txt=f"- {c_name}: {c_val} ({c_det}) | W:{w:.1f}, S:{s:.2f}", ln=1)
     else: pdf.cell(0, 5, txt="- Nenhum sinal gerado.", ln=1)
-    pdf.ln(5); pdf.set_font("Arial", 'B', 11); pdf.cell(0, 7, txt="Zonas S/R (K-Means):", ln=1)
-    pdf.set_font("Arial", size=9); sr_levels = data.get('support_resistance', [])
+    pdf.ln(5); pdf.set_font("Arial", 'B', 11); pdf.cell(0, 7, txt="Zonas S/R (K-Means):", ln=1); pdf.set_font("Arial", size=9); sr_levels = data.get('support_resistance', [])
     if sr_levels: pdf.multi_cell(0, 5, txt=", ".join([f"${lvl:,.0f}" for lvl in sr_levels]))
     else: pdf.cell(0, 5, txt="- Nenhuma zona identificada.", ln=1)
     pdf.ln(5); pdf.set_font("Arial", 'I', 8); pdf.ln(10); pdf.multi_cell(0, 4, txt=clean_text("Disclaimer: Relatório gerado automaticamente apenas para fins informativos. Não constitui aconselhamento financeiro."))
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp: pdf_output_path = tmp.name; pdf.output(pdf_output_path); return pdf_output_path
-    except Exception as e: st.error(f"Erro ao salvar PDF: {e}"); return None
+    try: with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp: pdf_output_path = tmp.name; pdf.output(pdf_output_path); return pdf_output_path
+    except Exception as e: st.error(f"Erro salvar PDF: {e}"); return None
 
 # ======================
 # |||| LOOP PRINCIPAL ||||
@@ -698,7 +666,7 @@ def main():
 
     # --- Sidebar ---
     with st.sidebar:
-        st.header("⚙️ Painel de Controle AI v2.2") # Versão incrementada
+        st.header("⚙️ Painel de Controle AI v2.2")
         with st.expander("🧠 Config IA", expanded=False):
             settings['lstm_window'] = st.slider("Janela LSTM", 30, 120, settings['lstm_window'], 10, key='sl_lstm_w')
             settings['lstm_epochs'] = st.slider("Épocas LSTM", 10, 100, settings['lstm_epochs'], 10, key='sl_lstm_e')
@@ -942,6 +910,7 @@ def main():
                                  scaler_rl = StandardScaler(); scaler_rl.fit(df_rl_train[feature_cols_base])
                                  joblib.dump(scaler_rl, RL_SCALER_PATH)
                                  env_config = {'feature_cols': RL_OBSERVATION_COLS_NORM}; joblib.dump(env_config, RL_ENV_CONFIG_PATH)
+                                 # Passa o df original para o env, ele usará o scaler carregado internamente
                                  env_train = BitcoinTradingEnv(df_rl_train, RL_OBSERVATION_COLS_NORM, scaler_rl, settings['rl_transaction_cost'])
                                  vec_env_train = DummyVecEnv([lambda: env_train])
                              except Exception as e: st.error(f"Erro preparação RL: {e}"); st.stop()
@@ -1014,9 +983,4 @@ def main():
                  except Exception as e: st.error(f"Erro ao gerar Excel: {e}")
 
 if __name__ == "__main__":
-    # Opcional: Configurar TF para limitar GPU
-    # if TF_AVAILABLE:
-    #    try: gpus = tf.config.list_physical_devices('GPU');
-    #        if gpus: tf.config.experimental.set_memory_growth(gpus[0], True)
-    #    except Exception as e: print(f"TF GPU Config Error: {e}")
     main()
