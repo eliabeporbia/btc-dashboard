@@ -99,33 +99,16 @@ RL_OBSERVATION_COLS_NORM = [f'{col}_norm' for col in RL_OBSERVATION_COLS_BASE]
 # FUNÇÕES AUXILIARES E CLASSES
 # ======================
 
-# --- Callback para Feedback SB3 (CORRIGIDO) ---
+# --- Callback SB3 ---
 class ProgressBarCallback(BaseCallback):
-    """Callback para mostrar progresso do treino SB3 no Streamlit."""
-    def __init__(self, total_timesteps: int, progress_bar, status_text, verbose=0):
-        super().__init__(verbose)
-        self.total_timesteps = total_timesteps
-        self.progress_bar = progress_bar
-        self.status_text = status_text
-        self.current_step = 0
-
-    # *** CORREÇÃO DE INDENTAÇÃO APLICADA AQUI ***
+    def __init__(self, total_timesteps: int, progress_bar, status_text, verbose=0): super().__init__(verbose); self.total_timesteps = total_timesteps; self.progress_bar = progress_bar; self.status_text = status_text; self.current_step = 0
     def _on_step(self) -> bool:
-        # Este bloco inteiro deve estar indentado em relação a 'class ProgressBarCallback'
-        self.current_step = self.model.num_timesteps
-        progress = self.current_step / self.total_timesteps
-        reward_str = ""
+        self.current_step = self.model.num_timesteps; progress = self.current_step / self.total_timesteps; reward_str = ""
         if self.model.ep_info_buffer and len(self.model.ep_info_buffer) > 0:
-            try:
-                reward_str = f"| R Média: {np.mean([ep_info['r'] for ep_info in self.model.ep_info_buffer]):.3f}"
-            except Exception: # Captura genérica se houver problema no buffer
-                pass
-        # Atualiza o texto e a barra de progresso
-        self.status_text.text(f"Treinando RL: {self.current_step}/{self.total_timesteps} {reward_str}")
-        self.progress_bar.progress(progress)
-        # Esta linha 'return True' deve estar indentada no mesmo nível das linhas acima dentro do _on_step
-        return True # Continua o treinamento
-    # *** FIM DA CORREÇÃO DE INDENTAÇÃO ***
+            try: reward_str = f"| R Média: {np.mean([ep_info['r'] for ep_info in self.model.ep_info_buffer]):.3f}"
+            except Exception: pass
+        self.status_text.text(f"Treinando RL: {self.current_step}/{self.total_timesteps} {reward_str}"); self.progress_bar.progress(progress)
+        return True
 
 # --- Ambiente RL ---
 if GYM_AVAILABLE and SKLEARN_AVAILABLE:
@@ -162,7 +145,7 @@ def load_sentiment_model():
     try: return pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english", framework="pt", device=-1)
     except Exception as e: st.error(f"Erro load Sentimento (pt): {e}"); return None
 
-def analyze_news_sentiment(news_list, _model): # Mantida
+def analyze_news_sentiment(news_list, _model): # Mantida com correção
     if _model is None: return news_list;
     if not news_list: return []; results = []
     for news in news_list:
@@ -170,8 +153,8 @@ def analyze_news_sentiment(news_list, _model): # Mantida
         try:
             text = news.get('title', '')
             if text: result = _model(text[:512])[0]; news['sentiment'] = result['label']; news['sentiment_score'] = result['score'] if result['label'] == 'POSITIVE' else (1 - result['score'])
-            results.append(news) # Append dentro do try
-        except Exception as e: st.warning(f"Erro análise sentimento: {e}"); results.append(news) # Append mesmo com erro
+            results.append(news)
+        except Exception as e: st.warning(f"Erro análise sentimento: {e}"); results.append(news)
     return results
 
 # --- Funções LSTM ---
@@ -507,20 +490,17 @@ def load_and_process_data():
         column_map = {'open': ['Open', 'open'],'high': ['High', 'high'],'low': ['Low', 'low'],'close': ['Close', 'close'],'volume': ['Volume', 'volume']}
         renamed_cols = {}; found_cols = {}
         for standard_name, possible_names in column_map.items():
-            for possible_name in btc_data.columns:
+            for possible_name in btc_data.columns: # Itera sobre colunas existentes
                 col_str = possible_name[0] if isinstance(possible_name, tuple) else possible_name
-                if isinstance(col_str, str) and col_str.lower() == standard_name:
-                    renamed_cols[possible_name] = standard_name; found_cols[standard_name] = True; break
+                if isinstance(col_str, str) and col_str.lower() == standard_name: renamed_cols[possible_name] = standard_name; found_cols[standard_name] = True; break
         btc_data.rename(columns=renamed_cols, inplace=True)
-        if not found_cols.get('close'):
-             adj_close_cols = [c for c in btc_data.columns if isinstance(c, str) and c.lower().replace(' ','') == 'adjclose']
-             if adj_close_cols: btc_data.rename(columns={adj_close_cols[0]: 'close'}, inplace=True); found_cols['close'] = True
+        if not found_cols.get('close'): adj_close_cols = [c for c in btc_data.columns if isinstance(c, str) and c.lower().replace(' ','') == 'adjclose'];
+        if adj_close_cols: btc_data.rename(columns={adj_close_cols[0]: 'close'}, inplace=True); found_cols['close'] = True
         required_ohlcv = ['open', 'high', 'low', 'close', 'volume']
         missing_cols = [col for col in required_ohlcv if col not in btc_data.columns]
         if missing_cols: raise ValueError(f"Colunas OHLCV ausentes: {missing_cols}. Disponíveis: {list(btc_data.columns)}")
         # --- FIM CORREÇÃO COLUNAS ---
-        btc_data.reset_index(inplace=True)
-        date_col = 'Date' if 'Date' in btc_data.columns else 'index' if 'index' in btc_data.columns else None
+        btc_data.reset_index(inplace=True); date_col = 'Date' if 'Date' in btc_data.columns else 'index' if 'index' in btc_data.columns else None
         if not date_col: raise ValueError("Coluna Date/index não encontrada.")
         btc_data.rename(columns={date_col: 'date'}, inplace=True)
         btc_data['date'] = pd.to_datetime(btc_data['date']).dt.normalize(); btc_data['price'] = btc_data['close']
@@ -910,7 +890,6 @@ def main():
                                  scaler_rl = StandardScaler(); scaler_rl.fit(df_rl_train[feature_cols_base])
                                  joblib.dump(scaler_rl, RL_SCALER_PATH)
                                  env_config = {'feature_cols': RL_OBSERVATION_COLS_NORM}; joblib.dump(env_config, RL_ENV_CONFIG_PATH)
-                                 # Passa o df original para o env, ele usará o scaler carregado internamente
                                  env_train = BitcoinTradingEnv(df_rl_train, RL_OBSERVATION_COLS_NORM, scaler_rl, settings['rl_transaction_cost'])
                                  vec_env_train = DummyVecEnv([lambda: env_train])
                              except Exception as e: st.error(f"Erro preparação RL: {e}"); st.stop()
