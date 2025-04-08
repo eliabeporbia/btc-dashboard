@@ -1515,4 +1515,3 @@ if __name__ == "__main__":
     #             print(e) # Configuração deve ser feita antes da inicialização
 
     main()
-```
