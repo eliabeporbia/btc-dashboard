@@ -147,105 +147,73 @@ class ProgressBarCallback(BaseCallback):
     """Callback para mostrar progresso do treino SB3 no Streamlit."""
     def __init__(self, total_timesteps: int, progress_bar, status_text, verbose=0):
         super().__init__(verbose)
-        self.total_timesteps = total_timesteps
-        self.progress_bar = progress_bar
-        self.status_text = status_text
-        self.current_step = 0
-
+        self.total_timesteps = total_timesteps; self.progress_bar = progress_bar
+        self.status_text = status_text; self.current_step = 0
     def _on_step(self) -> bool:
-        self.current_step = self.model.num_timesteps # SB3 atualiza isso
-        progress = self.current_step / self.total_timesteps
+        self.current_step = self.model.num_timesteps; progress = self.current_step / self.total_timesteps
         reward_str = ""
-        # Acessa recompensa média do buffer (pode dar erro se não disponível ainda)
         if self.model.ep_info_buffer and len(self.model.ep_info_buffer) > 0:
-            try:
-                reward_str = f"| R Média: {np.mean([ep_info['r'] for ep_info in self.model.ep_info_buffer]):.3f}"
-            except:
-                pass # Ignora erro se buffer estiver em formato inesperado temporariamente
+            try: reward_str = f"| R Média: {np.mean([ep_info['r'] for ep_info in self.model.ep_info_buffer]):.3f}"
+            except: pass
         self.status_text.text(f"Treinando RL: {self.current_step}/{self.total_timesteps} {reward_str}")
-        self.progress_bar.progress(progress)
-        return True # Continua o treinamento
+        self.progress_bar.progress(progress); return True
 
 # --- Ambiente RL Refatorado (mantida) ---
 if GYM_AVAILABLE and SKLEARN_AVAILABLE:
     class BitcoinTradingEnv(gym.Env):
         metadata = {'render_modes': ['human']}
-        # Recebe feature_cols_norm, mas usa feature_cols_base internamente para pegar dados do df
         def __init__(self, df, feature_cols_norm, scaler, transaction_cost=0.001, initial_balance=10000, render_mode=None):
             super().__init__()
-            self.feature_cols_base = [c.replace('_norm','') for c in feature_cols_norm] # Nomes base
-            required_cols = ['price'] + self.feature_cols_base # Precisa de 'price' além das features base
+            self.feature_cols_base = [c.replace('_norm','') for c in feature_cols_norm]
+            required_cols = ['price'] + self.feature_cols_base
             if df.empty or not all(col in df.columns for col in required_cols):
                 missing = [c for c in required_cols if c not in df.columns]
                 raise ValueError(f"DataFrame RL vazio ou colunas ausentes: {missing}")
             self.df = df.copy().reset_index(drop=True)
-            self.scaler = scaler # Scaler JÁ TREINADO
-            self.feature_cols_norm = feature_cols_norm # Nomes normalizados (para shape da obs)
-            self.transaction_cost = transaction_cost
-            self.initial_balance = initial_balance; self.render_mode = render_mode; self.current_step = 0
+            self.scaler = scaler; self.feature_cols_norm = feature_cols_norm
+            self.transaction_cost = transaction_cost; self.initial_balance = initial_balance
+            self.render_mode = render_mode; self.current_step = 0
             self.action_space = spaces.Discrete(3)
-            self.observation_space = spaces.Box(low=-5.0, high=5.0, shape=(len(self.feature_cols_norm),), dtype=np.float32) # Limites pós StandardScaler
-            # self.reset() # Chamado explicitamente fora se necessário
+            self.observation_space = spaces.Box(low=-5.0, high=5.0, shape=(len(self.feature_cols_norm),), dtype=np.float32)
 
         def _get_observation(self):
-            # Seleciona features BASE do passo atual
-            idx = min(self.current_step, len(self.df) - 1) # Garante índice válido
+            idx = min(self.current_step, len(self.df) - 1)
             features = self.df.loc[idx, self.feature_cols_base].values.reshape(1, -1)
-            # Normaliza usando o scaler PRÉ-TREINADO
             scaled_features = self.scaler.transform(features).astype(np.float32)
-            # Lida com possíveis NaNs/Infs e limita valores
             scaled_features = np.nan_to_num(scaled_features, nan=0.0, posinf=5.0, neginf=-5.0)
-            scaled_features = np.clip(scaled_features, -5.0, 5.0) # Clip extra
-            return scaled_features.flatten() # Retorna array 1D
+            scaled_features = np.clip(scaled_features, -5.0, 5.0)
+            return scaled_features.flatten()
 
-        def _get_info(self): # Mantida
-             # Usa min() para evitar erro no último passo ao acessar df[current_step]
+        def _get_info(self):
              idx = min(self.current_step, len(self.df) - 1)
              current_price = self.df.loc[idx, 'price']
              portfolio_value = self.balance + (self.btc_held * current_price)
-             return {
-                 'total_profit': portfolio_value - self.initial_balance,
-                 'portfolio_value': portfolio_value,
-                 'balance': self.balance,
-                 'btc_held': self.btc_held,
-                 'current_step': self.current_step
-             }
+             return {'total_profit': portfolio_value - self.initial_balance, 'portfolio_value': portfolio_value, 'balance': self.balance, 'btc_held': self.btc_held, 'current_step': self.current_step}
 
-        def reset(self, seed=None, options=None): # Mantida
+        def reset(self, seed=None, options=None):
             super().reset(seed=seed); self.balance = self.initial_balance; self.btc_held = 0
             self.current_step = 0; self.last_portfolio_value = self.initial_balance
             observation = self._get_observation(); info = self._get_info()
             return observation, info
 
-        def step(self, action): # Mantida (com custo)
-            idx = min(self.current_step, len(self.df) - 1) # Índice seguro
-            current_price = self.df.loc[idx, 'price']; cost_penalty = 0
+        def step(self, action):
+            idx = min(self.current_step, len(self.df) - 1); current_price = self.df.loc[idx, 'price']; cost_penalty = 0
             if action == 1 and self.balance > 10: # Buy
                 cost_penalty = self.balance * self.transaction_cost; self.balance -= cost_penalty
                 if self.balance > 0: self.btc_held += self.balance / current_price; self.balance = 0
             elif action == 2 and self.btc_held > 1e-6: # Sell
                 sell_value = self.btc_held * current_price; cost_penalty = sell_value * self.transaction_cost
                 self.balance += sell_value - cost_penalty; self.btc_held = 0
-
-            # Próximo passo
-            self.current_step += 1; terminated = self.current_step >= len(self.df) # Termina se step >= len
-            truncated = False
-
-            # Recompensa e Observação
+            self.current_step += 1; terminated = self.current_step >= len(self.df); truncated = False
             if not terminated:
                 next_idx = min(self.current_step, len(self.df) - 1)
                 next_price = self.df.loc[next_idx, 'price']; current_portfolio_value = self.balance + (self.btc_held * next_price)
                 reward = (current_portfolio_value - self.last_portfolio_value) - cost_penalty; self.last_portfolio_value = current_portfolio_value
                 observation = self._get_observation()
             else:
-                # Último estado: recompensa = 0, observação pode ser a última válida
                 reward = 0
-                # Para evitar erro, retorna a última observação válida do passo anterior
-                # (ou uma observação de zeros se o df tiver só 1 linha)
                 observation = self._get_observation() if len(self.df)>1 else np.zeros(self.observation_space.shape)
-
             info = self._get_info()
-            # if self.render_mode == "human": self.render() # Descomente para debug
             return observation, reward, terminated, truncated, info
 
         def render(self): print(f"Step:{self.current_step}|Bal:${self.balance:,.2f}|BTC:{self.btc_held:.6f}|Port:${self.last_portfolio_value:,.2f}")
@@ -258,7 +226,6 @@ def load_sentiment_model():
     try: return pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english", device=-1)
     except Exception as e: st.error(f"Erro ao carregar modelo Sentimento: {e}"); return None
 
-# analyze_news_sentiment (mantida)
 def analyze_news_sentiment(news_list, _model):
     if _model is None: return news_list
     if not news_list: return []
@@ -268,18 +235,17 @@ def analyze_news_sentiment(news_list, _model):
         try:
             text = news.get('title', '')
             if text:
-                result = _model(text[:512])[0] # Limita tamanho
+                result = _model(text[:512])[0]
                 news['sentiment'] = result['label']
                 news['sentiment_score'] = result['score'] if result['label'] == 'POSITIVE' else (1 - result['score'])
             results.append(news)
-        except Exception: results.append(news) # Adiciona mesmo com erro
+        except Exception: results.append(news)
     return results
 
 # --- Funções LSTM (mantida com tf_keras) ---
-@st.cache_resource # Cacheia a definição da arquitetura
+@st.cache_resource
 def create_lstm_architecture(input_shape, units=50):
     if not TF_AVAILABLE: return None
-    # Usa tf_keras ou tensorflow.keras dependendo do import
     try: from tf_keras.models import Sequential; from tf_keras.layers import LSTM, Dense, Dropout; from tf_keras.optimizers import Adam
     except ImportError: from tensorflow.keras.models import Sequential; from tensorflow.keras.layers import LSTM, Dense, Dropout; from tensorflow.keras.optimizers import Adam
     model = Sequential([LSTM(units, return_sequences=True, input_shape=input_shape), Dropout(0.2), LSTM(units, return_sequences=False), Dropout(0.2), Dense(25, activation='relu'), Dense(1)])
@@ -290,7 +256,6 @@ def load_lstm_model_and_scaler():
     model, scaler = None, None
     if TF_AVAILABLE and os.path.exists(LSTM_MODEL_PATH) and os.path.exists(LSTM_SCALER_PATH):
         try:
-             # Tenta carregar com tf_keras ou tensorflow.keras
              try: from tf_keras.models import load_model as load_model_tfk
              except ImportError: from tensorflow.keras.models import load_model as load_model_tfk
              model = load_model_tfk(LSTM_MODEL_PATH)
@@ -312,17 +277,16 @@ def train_and_save_lstm(data_prices, window, epochs, units):
     if model is None: return False
     try:
         status_lstm = st.status(f"Treinando LSTM ({epochs} épocas)...", expanded=True)
-        # Usar tf.device para garantir CPU se necessário, mas Keras deve gerenciar
         history = model.fit(X, y, epochs=epochs, batch_size=32, verbose=0)
         final_loss = history.history['loss'][-1]
         status_lstm.update(label=f"Treino LSTM concluído! Loss: {final_loss:.4f}", state="complete", expanded=False)
         model.save(LSTM_MODEL_PATH); joblib.dump(scaler, LSTM_SCALER_PATH)
         st.success(f"Modelo LSTM salvo em '{LSTM_MODEL_PATH}'.")
-        st.cache_resource.clear() # Limpa cache para forçar recarga
+        st.cache_resource.clear()
         return True
     except Exception as e: st.error(f"Erro treino/save LSTM: {e}"); return False
 
-def predict_with_lstm(model, scaler, data_prices, window): # Mantida
+def predict_with_lstm(model, scaler, data_prices, window):
     if model is None or scaler is None: return None
     try:
         last_window_data = data_prices['price'].dropna().values[-window:]
@@ -331,14 +295,12 @@ def predict_with_lstm(model, scaler, data_prices, window): # Mantida
         X_pred = np.reshape(last_window_scaled, (1, window, 1))
         pred_scaled = model.predict(X_pred, verbose=0)
         return scaler.inverse_transform(pred_scaled)[0][0]
-    except Exception: return None # Silencioso na previsão
+    except Exception: return None
 
-# --- Funções Indicadores Técnicos (mantidas como antes) ---
-# (Colar as versões robustecidas aqui)
+# --- Funções Indicadores Técnicos ---
 def calculate_ema(series, window):
     if not isinstance(series, pd.Series) or series.empty: return pd.Series(dtype=np.float64)
     return series.dropna().ewm(span=window, adjust=False).mean().reindex(series.index)
-
 def calculate_rsi(series, window=14):
     if not isinstance(series, pd.Series) or len(series.dropna()) < window + 1: return pd.Series(np.nan, index=series.index, dtype=np.float64)
     series_clean = series.dropna(); delta = series_clean.diff()
@@ -348,7 +310,6 @@ def calculate_rsi(series, window=14):
     rs = np.where(avg_loss == 0, np.inf, avg_gain / avg_loss)
     rsi = 100.0 - (100.0 / (1.0 + rs)); rsi = np.where(np.isinf(rs), 100.0, rsi)
     return rsi.reindex(series.index)
-
 def calculate_macd(series, fast=12, slow=26, signal=9):
     if not isinstance(series, pd.Series): return pd.Series(dtype=np.float64), pd.Series(dtype=np.float64)
     series_clean = series.dropna()
@@ -357,7 +318,6 @@ def calculate_macd(series, fast=12, slow=26, signal=9):
     macd = ema_fast - ema_slow
     signal_line = calculate_ema(macd, signal) if len(macd.dropna()) >= signal else pd.Series(np.nan, index=macd.index)
     return macd.reindex(series.index), signal_line.reindex(series.index)
-
 def calculate_bollinger_bands(series, window=20, num_std=2):
     if not isinstance(series, pd.Series): return pd.Series(dtype=np.float64), pd.Series(dtype=np.float64)
     series_clean = series.dropna()
@@ -366,17 +326,15 @@ def calculate_bollinger_bands(series, window=20, num_std=2):
     std = series_clean.rolling(window).std(ddof=0)
     upper = sma + (std * num_std); lower = sma - (std * num_std)
     return upper.reindex(series.index), lower.reindex(series.index)
-
 def calculate_obv(price_series, volume_series):
     if not isinstance(price_series, pd.Series) or not isinstance(volume_series, pd.Series) or price_series.empty or volume_series.empty or len(price_series) != len(volume_series): return pd.Series(dtype=np.float64)
     df_temp = pd.DataFrame({'price': price_series, 'volume': volume_series}).dropna()
     if len(df_temp) < 2: return pd.Series(np.nan, index=price_series.index)
     price = df_temp['price']; volume = df_temp['volume']
     price_diff = price.diff(); volume_signed = np.where(price_diff > 0, volume, np.where(price_diff < 0, -volume, 0))
-    obv = volume_signed.cumsum(); obv.iloc[0] = 0 # Garante início em 0
+    obv = volume_signed.cumsum(); obv.iloc[0] = 0
     obv_series = pd.Series(obv, index=df_temp.index)
     return obv_series.reindex(price_series.index)
-
 def calculate_stochastic(price_series, high_series, low_series, k_window=14, d_window=3):
     if not all(isinstance(s, pd.Series) for s in [price_series, high_series, low_series]) or price_series.empty or high_series.empty or low_series.empty: return pd.Series(dtype=np.float64), pd.Series(dtype=np.float64)
     df_temp = pd.DataFrame({'close': price_series, 'high': high_series, 'low': low_series}).dropna()
@@ -388,8 +346,7 @@ def calculate_stochastic(price_series, high_series, low_series, k_window=14, d_w
     stoch_k = stoch_k_raw.rolling(d_window).mean()
     stoch_d = stoch_k.rolling(d_window).mean()
     return stoch_k.reindex(price_series.index), stoch_d.reindex(price_series.index)
-
-def calculate_gaussian_process(price_series, window=30, lookahead=1): # Lookahead sempre 1
+def calculate_gaussian_process(price_series, window=30, lookahead=1):
     if not isinstance(price_series, pd.Series) or not SKLEARN_AVAILABLE: return pd.Series(dtype=np.float64)
     series_clean = price_series.dropna()
     if len(series_clean) < window + 1: return pd.Series(np.nan, index=price_series.index)
@@ -398,17 +355,11 @@ def calculate_gaussian_process(price_series, window=30, lookahead=1): # Lookahea
     predictions = np.full(len(series_clean), np.nan)
     scaler = StandardScaler()
     for i in range(window, len(series_clean)):
-        X_train = np.arange(i - window, i).reshape(-1, 1)
-        y_train = series_clean.iloc[i - window:i].values.reshape(-1, 1)
+        X_train = np.arange(i - window, i).reshape(-1, 1); y_train = series_clean.iloc[i - window:i].values.reshape(-1, 1)
         y_train_scaled = scaler.fit_transform(y_train).flatten()
-        try:
-            gpr.fit(X_train, y_train_scaled)
-            X_pred = np.array([[i]])
-            y_pred_scaled, _ = gpr.predict(X_pred, return_std=True)
-            predictions[i] = scaler.inverse_transform(y_pred_scaled.reshape(-1, 1)).flatten()[0]
+        try: gpr.fit(X_train, y_train_scaled); X_pred = np.array([[i]]); y_pred_scaled, _ = gpr.predict(X_pred, return_std=True); predictions[i] = scaler.inverse_transform(y_pred_scaled.reshape(-1, 1)).flatten()[0]
         except Exception: pass
     return pd.Series(predictions, index=series_clean.index).reindex(price_series.index)
-
 def identify_order_blocks(df, swing_length=11, show_bull=3, show_bear=3, use_body=True):
     if df.empty or not all(col in df.columns for col in ['date', 'open', 'high', 'low', 'close']): return df.copy(), []
     df_copy = df.copy(); df_copy['date'] = pd.to_datetime(df_copy['date']); df_copy = df_copy.sort_values('date')
@@ -445,15 +396,13 @@ def identify_order_blocks(df, swing_length=11, show_bull=3, show_bear=3, use_bod
             elif block['type'] == 'bearish_ob': subsequent_data = df_copy[df_copy['date'] > block['pivot_date']];
             if not subsequent_data.empty and (subsequent_data['close'] > block['high']).any(): block['broken'] = True; block['breaker_type'] = 'bearish_breaker'
     blocks.sort(key=lambda x: x['start_date']); return df_copy, blocks
-
 def plot_order_blocks(fig, blocks, current_price): # Mantida
     if not isinstance(fig, go.Figure) or not blocks: return fig
     colors = {"bull_ob": "rgba(0, 0, 255, 0.2)", "bear_ob": "rgba(255, 165, 0, 0.2)", "bull_breaker": "rgba(255, 0, 0, 0.1)", "bear_breaker": "rgba(0, 255, 0, 0.1)", "line_bull": "blue", "line_bear": "orange", "line_bull_br": "red", "line_bear_br": "green"}
     max_blocks_plot = 10; plotted = 0
     for block in reversed(blocks):
         if plotted >= max_blocks_plot: break
-        is_breaker = block.get('broken', False); b_type = block.get('type'); br_type = block.get('breaker_type')
-        fill_color, line_color, line_width = None, None, 0
+        is_breaker = block.get('broken', False); b_type = block.get('type'); br_type = block.get('breaker_type'); fill_color, line_color, line_width = None, None, 0
         if not is_breaker:
             if b_type == 'bullish_ob': fill_color, line_color = colors['bull_ob'], colors['line_bull']
             elif b_type == 'bearish_ob': fill_color, line_color = colors['bear_ob'], colors['line_bear']
@@ -465,26 +414,21 @@ def plot_order_blocks(fig, blocks, current_price): # Mantida
             else: continue
         end_visual = block['end_date'] + pd.Timedelta(hours=12) if block['start_date'] == block['end_date'] else block['end_date']
         try: fig.add_shape(type="rect", x0=block['start_date'], y0=block['low'], x1=end_visual, y1=block['high'], line=dict(color=line_color, width=line_width), fillcolor=fill_color, layer="below"); plotted += 1
-        except Exception as e: print(f"Warning: Could not plot block shape: {e}") # Non-fatal
+        except Exception as e: print(f"Warning plot block: {e}")
     return fig
-
 def detect_support_resistance_clusters(prices, n_clusters=5): # Mantida
-    if not SKLEARN_AVAILABLE: return []
-    if not isinstance(prices, (np.ndarray, pd.Series)): return []
-    prices_clean = prices[~np.isnan(prices)]
+    if not SKLEARN_AVAILABLE or not isinstance(prices, (np.ndarray, pd.Series)): return []
+    prices_clean = prices[~np.isnan(prices)];
     if len(prices_clean) < n_clusters: return []
     X = np.array(prices_clean).reshape(-1, 1); scaler = StandardScaler(); X_scaled = scaler.fit_transform(X)
     try: kmeans = KMeans(n_clusters=n_clusters, n_init='auto', random_state=42).fit(X_scaled); clusters = sorted([c[0] for c in scaler.inverse_transform(kmeans.cluster_centers_)]); return clusters
     except Exception as e: st.warning(f"Erro K-Means S/R: {e}"); return []
-
 def detect_divergences(price_series, indicator_series, window=14): # Mantida
     if not isinstance(price_series, pd.Series) or not isinstance(indicator_series, pd.Series) or price_series.empty or indicator_series.empty: return pd.DataFrame({'divergence': 0}, index=price_series.index)
-    df = pd.DataFrame({'price': price_series, 'indicator': indicator_series}).dropna()
+    df = pd.DataFrame({'price': price_series, 'indicator': indicator_series}).dropna();
     if len(df) < window: return pd.DataFrame({'divergence': 0}, index=price_series.index).fillna(0)
-    price_roll_max = df['price'].rolling(window, center=True).max(); price_roll_min = df['price'].rolling(window, center=True).min()
-    ind_roll_max = df['indicator'].rolling(window, center=True).max(); ind_roll_min = df['indicator'].rolling(window, center=True).min()
-    bearish_div = (df['price'] == price_roll_max) & (df['indicator'] < ind_roll_max.shift(1)) & (df['price'] > df['price'].shift(1))
-    bullish_div = (df['price'] == price_roll_min) & (df['indicator'] > ind_roll_min.shift(1)) & (df['price'] < df['price'].shift(1))
+    price_roll_max = df['price'].rolling(window, center=True).max(); price_roll_min = df['price'].rolling(window, center=True).min(); ind_roll_max = df['indicator'].rolling(window, center=True).max(); ind_roll_min = df['indicator'].rolling(window, center=True).min()
+    bearish_div = (df['price'] == price_roll_max) & (df['indicator'] < ind_roll_max.shift(1)) & (df['price'] > df['price'].shift(1)); bullish_div = (df['price'] == price_roll_min) & (df['indicator'] > ind_roll_min.shift(1)) & (df['price'] < df['price'].shift(1))
     df['divergence'] = 0; df.loc[bearish_div, 'divergence'] = -1; df.loc[bullish_div, 'divergence'] = 1
     return df[['divergence']].reindex(price_series.index).fillna(0)
 
@@ -508,30 +452,42 @@ def simulate_event(event, price_series): # Mantida
 def get_market_sentiment(): # Mantida
     try: response = requests.get("https://api.alternative.me/fng/", timeout=10); response.raise_for_status(); data = response.json(); value = int(data.get("data", [{}])[0].get("value", 50)); sentiment = data.get("data", [{}])[0].get("value_classification", "Neutral"); return {"value": value, "sentiment": sentiment}
     except Exception as e: st.warning(f"Falha F&G: {e}"); return {"value": 50, "sentiment": "Neutral"}
-def get_traditional_assets(): # Mantida
-    assets = {"BTC-USD": "BTC-USD", "S&P 500": "^GSPC", "Ouro": "GC=F", "ETH-USD": "ETH-USD"}; dfs = []; end_date = datetime.now(); start_date = end_date - timedelta(days=95)
+
+# --- Função get_traditional_assets com correção do erro SyntaxError ---
+def get_traditional_assets():
+    assets = {"BTC-USD": "BTC-USD", "S&P 500": "^GSPC", "Ouro": "GC=F", "ETH-USD": "ETH-USD"}
+    dfs = []; end_date = datetime.now(); start_date = end_date - timedelta(days=95)
     for name, ticker in assets.items():
-        try: data = yf.download(ticker, start=start_date, end=end_date, interval="1d", progress=False);
-        if not data.empty and 'Close' in data.columns: data = data['Close'].resample('1D').ffill().to_frame(); data = data.reset_index().rename(columns={'Close': 'value', 'Date': 'date'}); data['date'] = pd.to_datetime(data['date']).dt.normalize(); data['asset'] = name; dfs.append(data.tail(90))
-        except Exception as e: st.warning(f"Falha buscar {name}: {e}")
+        try:
+            data = yf.download(ticker, start=start_date, end=end_date, interval="1d", progress=False)
+            # *** CORREÇÃO DO SyntaxError: Bloco if indentado corretamente ***
+            if not data.empty and 'Close' in data.columns:
+                data = data['Close'].resample('1D').ffill().to_frame()
+                data = data.reset_index().rename(columns={'Close': 'value', 'Date': 'date'})
+                data['date'] = pd.to_datetime(data['date']).dt.normalize()
+                data['asset'] = name
+                dfs.append(data.tail(90))
+            # *** FIM DA CORREÇÃO ***
+        except Exception as e:
+            st.warning(f"Falha ao buscar {name} ({ticker}): {e}")
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+
 def filter_news_by_confidence(news_data, min_confidence=0.7): # Mantida
     if not isinstance(news_data, list): return []
     return [news for news in news_data if news.get('confidence', news.get('sentiment_score', 0)) >= min_confidence]
 
 # --- Funções Backtesting (mantidas) ---
-# calculate_daily_returns, calculate_strategy_returns, backtest_*, calculate_metrics, optimize_strategy_parameters
-def calculate_daily_returns(df):
+def calculate_daily_returns(df): # Mantida
     if df.empty or 'price' not in df.columns: return df
     df_copy = df.copy(); df_copy['daily_return'] = df_copy['price'].pct_change()
     df_copy['cumulative_return'] = (1 + df_copy['daily_return']).cumprod()
     return df_copy
-def calculate_strategy_returns(df, signal_col='signal'):
+def calculate_strategy_returns(df, signal_col='signal'): # Mantida
     if df.empty or 'daily_return' not in df.columns or signal_col not in df.columns: return df
     df_copy = df.copy(); df_copy['strategy_return'] = df_copy[signal_col].shift(1) * df_copy['daily_return']
     df_copy['strategy_cumulative'] = (1 + df_copy['strategy_return'].fillna(0)).cumprod()
     return df_copy
-# ... (Colar as funções backtest_* aqui) ...
+# Colar as funções backtest_* aqui
 def backtest_rsi_strategy(df_input, rsi_window=14, overbought=70, oversold=30):
     if df_input.empty or 'price' not in df_input.columns: return pd.DataFrame()
     df = df_input.copy(); df[f'RSI_{rsi_window}'] = calculate_rsi(df['price'], rsi_window)
@@ -649,13 +605,58 @@ def optimize_strategy_parameters(data, strategy_name, param_space): # Mantida
     else: st.warning("Nenhuma combinação válida.")
     return best_params, best_sharpe, best_results_df
 
-# --- Geração de Sinais V2 (Com correção do erro) ---
+# --- Carregamento de Dados Refatorado (mantida) ---
+@st.cache_data(ttl=3600, show_spinner="Carregando e processando dados de mercado...")
+def load_and_process_data():
+    data = {'prices': pd.DataFrame()}
+    try:
+        ticker = "BTC-USD"; btc_data_raw = yf.download(ticker, period="1y", interval="1d", progress=False)
+        if not isinstance(btc_data_raw, pd.DataFrame) or btc_data_raw.empty: raise ValueError(f"yfinance não retornou DataFrame para {ticker}.")
+        btc_data = btc_data_raw.copy(); new_cols = []
+        for col in btc_data.columns:
+            if isinstance(col, tuple): new_cols.append('_'.join(map(str, col)).lower().strip().replace(' ', '_'))
+            elif isinstance(col, str): new_cols.append(col.lower().strip().replace(' ', '_'))
+            else: new_cols.append(str(col).lower().strip().replace(' ', '_'))
+        btc_data.columns = new_cols
+        required_ohlcv = ['open', 'high', 'low', 'close', 'volume']
+        if not all(c in btc_data.columns for c in required_ohlcv): raise ValueError(f"Colunas OHLCV ausentes: {required_ohlcv}")
+        btc_data.reset_index(inplace=True); btc_data['date'] = pd.to_datetime(btc_data['date']).dt.normalize(); btc_data['price'] = btc_data['close']
+        cols_order = ['date', 'open', 'high', 'low', 'close', 'price', 'volume']; cols_order = [c for c in cols_order if c in btc_data.columns]
+        data['prices'] = btc_data[cols_order].sort_values('date').reset_index(drop=True)
+        if not data['prices'].empty and SKLEARN_AVAILABLE:
+            df = data['prices']
+            for window in DEFAULT_SETTINGS['ma_windows']: df[f'MA{window}'] = df['price'].rolling(window).mean()
+            rsi_w = DEFAULT_SETTINGS["rsi_window"]; df[f'RSI_{rsi_w}'] = calculate_rsi(df['price'], rsi_w); df['RSI_14'] = df[f'RSI_{rsi_w}']
+            df[f'MACD_12_26'], df[f'MACD_Signal_9'] = calculate_macd(df['price'], 12, 26, 9); df['MACD'] = df['MACD_12_26']; df['MACD_Signal'] = df['MACD_Signal_9']
+            bb_w = DEFAULT_SETTINGS["bb_window"]; upper, lower = calculate_bollinger_bands(df['price'], bb_w); df[f'BB_Upper_{bb_w}'] = upper; df[f'BB_Lower_{bb_w}'] = lower; df['BB_Upper_20'] = upper; df['BB_Lower_20'] = lower
+            df['OBV'] = calculate_obv(df['price'], df['volume']); df['OBV_MA_20'] = df['OBV'].rolling(20).mean()
+            k, d = calculate_stochastic(df['price'], df['high'], df['low'], 14, 3); df['Stoch_K_14_3'] = k; df['Stoch_D_14_3'] = d
+            gp_w = DEFAULT_SETTINGS["gp_window"]; df[f'GP_Prediction_{gp_w}'] = calculate_gaussian_process(df['price'], gp_w, 1)
+            df['RSI_Divergence'] = detect_divergences(df['price'], df[f'RSI_{rsi_w}'])
+            lookback_sr = 90
+            if len(df['price'].dropna()) >= lookback_sr: data['support_resistance'] = detect_support_resistance_clusters(df['price'].dropna().tail(lookback_sr).values, DEFAULT_SETTINGS['n_clusters'])
+            else: data['support_resistance'] = []
+            df['Volume_MA_20'] = df['volume'].rolling(20).mean()
+            data['prices'] = df
+        try: hr_response=requests.get("https://api.blockchain.info/charts/hash-rate?format=json×pan=1year", timeout=10); hr_response.raise_for_status(); hr_data=pd.DataFrame(hr_response.json()["values"]); hr_data["date"]=pd.to_datetime(hr_data["x"], unit="s").dt.normalize(); hr_data['y']=hr_data['y']/1e12; data['hashrate']=hr_data[['date', 'y']].dropna()
+        except Exception: data['hashrate']=pd.DataFrame({'date': [], 'y': []})
+        try: diff_response=requests.get("https://api.blockchain.info/charts/difficulty?timespan=1year&format=json", timeout=10); diff_response.raise_for_status(); diff_data=pd.DataFrame(diff_response.json()["values"]); diff_data["date"]=pd.to_datetime(diff_data["x"], unit="s").dt.normalize(); diff_data['y']=diff_data['y']/1e12; data['difficulty']=diff_data[['date', 'y']].dropna()
+        except Exception: data['difficulty']=pd.DataFrame({'date': [], 'y': []})
+        data['exchanges_simulated'] = get_exchange_flows_simulated()
+        news_end_date = datetime.now(tz='UTC').normalize()
+        data['whale_alert_simulated'] = pd.DataFrame({"date": pd.date_range(end=news_end_date - timedelta(days=1), periods=5, freq='12H'), "amount": np.random.randint(500, 5000, 5), "exchange": ["Binance", "Coinbase", "Kraken", "Unknown", "Binance"]})
+        data['news'] = [{"title": f"Notícia Simulada {i}", "date": news_end_date - timedelta(days=i), "confidence": np.random.uniform(0.6, 0.95), "source": "Fonte Simulada"} for i in range(5)]
+    except Exception as e:
+        st.error(f"Erro fatal ao carregar/processar dados: {e}")
+        data = {'prices': pd.DataFrame(), 'hashrate': pd.DataFrame(), 'difficulty': pd.DataFrame(), 'exchanges_simulated': pd.DataFrame(), 'whale_alert_simulated': pd.DataFrame(), 'news': [], 'support_resistance': []}
+    return data
+
+# --- Geração de Sinais V2 (Com correção do erro SyntaxError) ---
 def generate_signals_v2(data, settings, lstm_prediction=None, rl_action=None):
     signals = []; buy_score, sell_score, neutral_score = 0.0, 0.0, 0.0
     df = data.get('prices', pd.DataFrame());
     if df.empty: return signals, "➖ DADOS INDISP.", 0, 0
-    # Garante que temos pelo menos 2 linhas para ter prev_row diferente de last_row
-    if len(df) < 2: return signals, "➖ DADOS INSUF.", 0, 0
+    if len(df) < 2: return signals, "➖ DADOS INSUF.", 0, 0 # Precisa de pelo menos 2 linhas
     last_row = df.iloc[-1]; prev_row = df.iloc[-2]
     last_price = last_row.get('price', np.nan)
     if pd.isna(last_price): return signals, "➖ PREÇO INDISP.", 0, 0
@@ -683,7 +684,7 @@ def generate_signals_v2(data, settings, lstm_prediction=None, rl_action=None):
     if not pd.isna(k) and not pd.isna(d): add_signal("Stochastic (14,3)", k < 20 and d < 20, k > 80 and d > 80, f"K:{k:.1f},D:{d:.1f}", INDICATOR_WEIGHTS['stochastic'])
     gp_pred = last_row.get(f'GP_Prediction_{settings["gp_window"]}', np.nan)
     if not pd.isna(gp_pred): gp_thresh=0.02; add_signal("Gaussian Process", gp_pred > last_price*(1+gp_thresh), gp_pred < last_price*(1-gp_thresh), f"P:${gp_pred:,.0f}", INDICATOR_WEIGHTS['gaussian_process'])
-    _, current_blocks = identify_order_blocks(data['prices'], **settings) # Usa dados completos para ID
+    _, current_blocks = identify_order_blocks(data['prices'], **settings)
     ob_buy, ob_sell = False, False; ob_disp = "N/A"
     for block in reversed(current_blocks):
         is_br, b_type, br_type = block.get('broken',False), block.get('type'), block.get('breaker_type')
@@ -695,15 +696,14 @@ def generate_signals_v2(data, settings, lstm_prediction=None, rl_action=None):
             if br_type=='bullish_breaker' and in_brz: ob_sell=True; ob_disp=f"BullBrk:{block['low']:,.0f}-{block['high']:,.0f}"; break
             if br_type=='bearish_breaker' and in_brz: ob_buy=True; ob_disp=f"BearBrk:{block['low']:,.0f}-{block['high']:,.0f}"; break
     add_signal("Order/Breaker Block", ob_buy, ob_sell, ob_disp, INDICATOR_WEIGHTS['order_blocks'])
-
-    # *** CORREÇÃO DO ERRO de SyntaxError ***
+    # *** CORREÇÃO APLICADA AQUI ***
     rsi_div = last_row.get('RSI_Divergence', 0)
     div_disp = "Nenhuma"
     div_buy = (rsi_div == 1)
     div_sell = (rsi_div == -1)
     if div_buy:
         div_disp = "Alta"
-    elif div_sell: # Corrigido: elif em nova linha
+    elif div_sell: # Corrigido
         div_disp = "Baixa"
     add_signal("Divergência RSI", div_buy, div_sell, div_disp, INDICATOR_WEIGHTS['divergence'])
     # *** FIM DA CORREÇÃO ***
@@ -722,14 +722,12 @@ def generate_signals_v2(data, settings, lstm_prediction=None, rl_action=None):
     buy_c = sum(1 for s in signals if s['signal']=='COMPRA'); sell_c = sum(1 for s in signals if s['signal']=='VENDA')
     return signals, final_verdict, buy_c, sell_c
 
-
 # --- Funções PDF e Excel (mantidas) ---
-def clean_text(text):
+def clean_text(text): # Mantida
     if text is None: return ""
     try: text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]', '', str(text)); return str(text).encode('latin-1', 'ignore').decode('latin-1')
     except: return re.sub(r'[^\x20-\x7E]+', '', str(text))
-
-def generate_pdf_report(data, signals, final_verdict, settings):
+def generate_pdf_report(data, signals, final_verdict, settings): # Mantida
     pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", 'B', 16)
     pdf.cell(0, 10, txt="Relatório BTC AI Dashboard Pro+ v2.1", ln=1, align='C'); pdf.ln(5)
     pdf.set_font("Arial", size=10); pdf.cell(0, 5, txt=f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", ln=1, align='C'); pdf.ln(10)
@@ -747,24 +745,15 @@ def generate_pdf_report(data, signals, final_verdict, settings):
     pdf.set_font("Arial", 'B', 11); pdf.cell(0, 7, txt="Sinais Individuais:", ln=1)
     pdf.set_font("Arial", size=9)
     if signals:
-        for signal in signals:
-            c_name = clean_text(signal.get('name', 'N/A')); c_val = clean_text(signal.get('signal', 'N/A'))
-            c_det = clean_text(str(signal.get('value', ''))); w = signal.get('weight', 0); s = signal.get('score', 0)
-            pdf.cell(0, 5, txt=f"- {c_name}: {c_val} ({c_det}) | W:{w:.1f}, S:{s:.2f}", ln=1)
+        for signal in signals: c_name=clean_text(signal.get('name','N/A')); c_val=clean_text(signal.get('signal','N/A')); c_det=clean_text(str(signal.get('value',''))); w=signal.get('weight',0); s=signal.get('score',0); pdf.cell(0, 5, txt=f"- {c_name}: {c_val} ({c_det}) | W:{w:.1f}, S:{s:.2f}", ln=1)
     else: pdf.cell(0, 5, txt="- Nenhum sinal gerado.", ln=1)
     pdf.ln(5); pdf.set_font("Arial", 'B', 11); pdf.cell(0, 7, txt="Zonas S/R (K-Means):", ln=1)
-    pdf.set_font("Arial", size=9)
-    sr_levels = data.get('support_resistance', [])
+    pdf.set_font("Arial", size=9); sr_levels = data.get('support_resistance', [])
     if sr_levels: pdf.multi_cell(0, 5, txt=", ".join([f"${lvl:,.0f}" for lvl in sr_levels]))
     else: pdf.cell(0, 5, txt="- Nenhuma zona identificada.", ln=1)
-    pdf.ln(5); pdf.set_font("Arial", 'I', 8); pdf.ln(10)
-    pdf.multi_cell(0, 4, txt=clean_text("Disclaimer: Este relatório é gerado automaticamente apenas para fins informativos e educacionais. Não constitui aconselhamento financeiro."))
+    pdf.ln(5); pdf.set_font("Arial", 'I', 8); pdf.ln(10); pdf.multi_cell(0, 4, txt=clean_text("Disclaimer: Relatório gerado automaticamente apenas para fins informativos. Não constitui aconselhamento financeiro."))
     try:
-        # Usar um caminho temporário seguro
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            pdf_output_path = tmp.name
-            pdf.output(pdf_output_path)
-        return pdf_output_path
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp: pdf_output_path = tmp.name; pdf.output(pdf_output_path); return pdf_output_path
     except Exception as e: st.error(f"Erro ao salvar PDF: {e}"); return None
 
 # ======================
@@ -774,26 +763,21 @@ def main():
     # --- Inicialização ---
     if 'user_settings' not in st.session_state: st.session_state.user_settings = DEFAULT_SETTINGS.copy()
     settings = st.session_state.user_settings
-
-    # Carrega modelos (IA e Scalers)
     sentiment_model = load_sentiment_model()
     lstm_model, lstm_scaler = load_lstm_model_and_scaler()
-    rl_model, rl_scaler, rl_env_config = None, None, None # Inicializa
+    rl_model, rl_scaler, rl_env_config = None, None, None
     if SB3_AVAILABLE and SKLEARN_AVAILABLE and os.path.exists(RL_MODEL_PATH):
-        try:
-            # Tenta carregar modelo RL
-            rl_model = PPO.load(RL_MODEL_PATH, device='auto') # Usa GPU se disponível
-            # Verifica e carrega scaler e config
+        try: rl_model = PPO.load(RL_MODEL_PATH, device='auto')
+        except Exception as e: st.error(f"Erro load RL model: {e}"); rl_model=None
+        if rl_model: # Só carrega scaler/config se modelo carregou
             if os.path.exists(RL_SCALER_PATH): rl_scaler = joblib.load(RL_SCALER_PATH)
-            else: rl_model = None; st.warning(f"Arquivo scaler RL '{RL_SCALER_PATH}' não encontrado.")
+            else: rl_model = None; st.warning(f"Arquivo scaler RL não encontrado.")
             if os.path.exists(RL_ENV_CONFIG_PATH): rl_env_config = joblib.load(RL_ENV_CONFIG_PATH)
-            else: rl_model = None; st.warning(f"Arquivo config RL '{RL_ENV_CONFIG_PATH}' não encontrado.")
-        except Exception as e: st.error(f"Erro ao carregar modelo/scaler RL: {e}"); rl_model=None
+            else: rl_model = None; st.warning(f"Arquivo config RL não encontrado.")
 
     # --- Sidebar ---
     with st.sidebar:
         st.header("⚙️ Painel de Controle AI v2.1")
-        # Expanders para Configurações
         with st.expander("🧠 Config IA", expanded=False):
             settings['lstm_window'] = st.slider("Janela LSTM", 30, 120, settings['lstm_window'], 10, key='sl_lstm_w')
             settings['lstm_epochs'] = st.slider("Épocas LSTM", 10, 100, settings['lstm_epochs'], 10, key='sl_lstm_e')
@@ -811,70 +795,41 @@ def main():
             settings['n_clusters'] = st.slider("Clusters S/R", 3, 10, settings['n_clusters'], 1, key='sl_cls')
         with st.expander("📰 Notícias", expanded=False):
             settings['min_confidence'] = st.slider("Confiança Mín.", 0.5, 1.0, settings['min_confidence'], 0.05, key='sl_news')
-        # Botão de Atualização
         st.divider()
-        if st.button("🔄 Atualizar Dados", type="primary", use_container_width=True, key='bt_upd'):
-            st.cache_data.clear(); st.success("Cache limpo..."); st.rerun()
-        # Legenda
-        with st.expander("ℹ️ Legenda", expanded=False):
-             st.markdown("""
-             **📌 Legenda Sinais:**
-             - 🟢 **COMPRA**: Indicador altista
-             - 🔴 **VENDA**: Indicador baixista
-             - 🟡 **NEUTRO**: Sem sinal claro
-             - ✅ **FORTE COMPRA**: Consenso altista forte
-             - ❌ **FORTE VENDA**: Consenso baixista forte
-             ... (Resto da legenda) ...
-             """)
+        if st.button("🔄 Atualizar Dados", type="primary", use_container_width=True, key='bt_upd'): st.cache_data.clear(); st.success("Cache limpo..."); st.rerun()
+        with st.expander("ℹ️ Legenda", expanded=False): st.markdown("""**📌 Legenda Sinais:** ... (Resto da legenda) ...""")
 
-    # --- Carregamento Principal de Dados ---
+    # --- Carregamento Principal ---
     master_data = load_and_process_data()
-    if 'prices' not in master_data or master_data['prices'].empty:
-        st.error("Erro crítico ao carregar dados. Dashboard não pode continuar.")
-        st.stop()
+    if 'prices' not in master_data or master_data['prices'].empty: st.error("Erro dados. Dashboard parado."); st.stop()
 
-    # --- Previsão/Ação IA (Usa modelos carregados) ---
+    # --- Previsão/Ação IA ---
     current_lstm_prediction = None
-    if lstm_model and lstm_scaler:
-        current_lstm_prediction = predict_with_lstm(lstm_model, lstm_scaler, master_data['prices'], settings['lstm_window'])
-
+    if lstm_model and lstm_scaler: current_lstm_prediction = predict_with_lstm(lstm_model, lstm_scaler, master_data['prices'], settings['lstm_window'])
     current_rl_action = None
     if rl_model and rl_scaler and rl_env_config:
          try:
-             rl_feature_cols_norm = rl_env_config['feature_cols'] # Nomes normalizados
-             rl_feature_cols_base = [c.replace('_norm','') for c in rl_feature_cols_norm] # Nomes base
+             rl_feature_cols_norm = rl_env_config['feature_cols']; rl_feature_cols_base = [c.replace('_norm','') for c in rl_feature_cols_norm]
              df_rl_current = master_data['prices'].copy()
-             if not all(c in df_rl_current.columns for c in rl_feature_cols_base):
-                 missing_rl_cols = [c for c in rl_feature_cols_base if c not in df_rl_current.columns]
-                 raise ValueError(f"Colunas base para RL não encontradas: {missing_rl_cols}")
-             df_rl_current.dropna(subset=rl_feature_cols_base, inplace=True) # Drop NaNs ANTES de escalar/simular
-             df_rl_current = df_rl_current.reset_index(drop=True)
-
+             if not all(c in df_rl_current.columns for c in rl_feature_cols_base): raise ValueError(f"Colunas RL base ausentes: {rl_feature_cols_base}")
+             df_rl_current.dropna(subset=rl_feature_cols_base, inplace=True); df_rl_current = df_rl_current.reset_index(drop=True)
              if not df_rl_current.empty:
-                 # Cria ambiente SÓ com os dados necessários e scaler carregado
                  env_sim = BitcoinTradingEnv(df_rl_current, rl_feature_cols_norm, rl_scaler, settings['rl_transaction_cost'])
-                 obs, _ = env_sim.reset() # Ignora info do reset
-                 # Obtém a ação para a observação inicial (estado atual do mercado)
-                 current_rl_action, _ = rl_model.predict(obs, deterministic=True)
-             else:
-                 st.warning("Não há dados suficientes para simular ação RL após limpeza.")
-
+                 obs, _ = env_sim.reset()
+                 current_rl_action, _ = rl_model.predict(obs, deterministic=True) # Ação no estado atual
+             else: st.warning("Dados insuficientes simular RL.")
          except Exception as e: st.warning(f"Erro simulação ação RL: {e}")
 
-    # --- Geração de Sinais Combinados ---
-    signals, final_verdict, buy_count, sell_count = generate_signals_v2(
-        master_data, settings, current_lstm_prediction, current_rl_action
-    )
+    # --- Geração Sinais ---
+    signals, final_verdict, buy_count, sell_count = generate_signals_v2(master_data, settings, current_lstm_prediction, current_rl_action)
 
-    # --- Busca Dados Adicionais (mantido) ---
-    sentiment = get_market_sentiment()
-    traditional_assets = get_traditional_assets()
+    # --- Busca Dados Adicionais ---
+    sentiment = get_market_sentiment(); traditional_assets = get_traditional_assets()
     if sentiment_model and 'news' in master_data: analyzed_news = analyze_news_sentiment(master_data['news'], sentiment_model)
     else: analyzed_news = master_data.get('news', [])
     filtered_news = filter_news_by_confidence(analyzed_news, settings['min_confidence'])
 
-
-    # --- Layout Principal (Métricas e Tabs) ---
+    # --- Layout Principal ---
     st.header("📊 Painel Integrado BTC AI Pro+ v2.1")
     # Métricas
     mcol1, mcol2, mcol3, mcol4, mcol5 = st.columns(5)
@@ -900,10 +855,10 @@ def main():
     with tabs[0]:
         col1, col2 = st.columns([3, 1])
         with col1: # Gráficos
-            st.subheader("Preço BTC, Médias Móveis e Níveis Chave")
+            st.subheader("Preço BTC, MAs e Níveis Chave")
             if not master_data['prices'].empty:
                 fig_price = go.Figure()
-                if st.checkbox("Mostrar Candlestick", value=False, key='cb_ohlc'): fig_price.add_trace(go.Candlestick(x=master_data['prices']['date'], open=master_data['prices']['open'], high=master_data['prices']['high'], low=master_data['prices']['low'], close=master_data['prices']['close'], name='BTC OHLC'))
+                if st.checkbox("Candlestick", value=False, key='cb_ohlc'): fig_price.add_trace(go.Candlestick(x=master_data['prices']['date'], open=master_data['prices']['open'], high=master_data['prices']['high'], low=master_data['prices']['low'], close=master_data['prices']['close'], name='BTC OHLC'))
                 else: fig_price.add_trace(go.Scatter(x=master_data['prices']['date'], y=master_data['prices']['price'], mode='lines', name='Preço BTC', line=dict(color='orange', width=2)))
                 for window in settings['ma_windows']:
                      if f'MA{window}' in master_data['prices'].columns: fig_price.add_trace(go.Scatter(x=master_data['prices']['date'], y=master_data['prices'][f'MA{window}'], mode='lines', name=f'MA {window}', opacity=0.7))
@@ -939,14 +894,12 @@ def main():
             ex_df = master_data.get('exchanges_simulated');
             if ex_df is not None and not ex_df.empty: st.dataframe(ex_df.style.background_gradient(cmap='RdYlGn', subset=['Líquido'], vmin=-500, vmax=500).format("{:,.0f}"), use_container_width=True, height=180)
         st.divider(); st.subheader("😨 Sentimento do Mercado (F&G)")
-        if sentiment:
-            fig_sent = go.Figure(go.Indicator(mode="gauge+number+delta",value=sentiment['value'],title={'text': f"F&G: {sentiment['sentiment']}"}, gauge={'axis': {'range': [0, 100]},'bar': {'color': "darkblue"},'steps': [{'range': [0, 25], 'color': "#d62728"},{'range': [25, 45], 'color': "#ff7f0e"},{'range': [45, 55], 'color': "#f0de69"},{'range': [55, 75], 'color': "#aec7e8"},{'range': [75, 100], 'color': "#2ca02c"}],'threshold' : {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': sentiment['value']}})); fig_sent.update_layout(height=250, margin=dict(l=20, r=20, t=50, b=20)); st.plotly_chart(fig_sent, use_container_width=True)
+        if sentiment: fig_sent = go.Figure(go.Indicator(mode="gauge+number+delta",value=sentiment['value'],title={'text': f"F&G: {sentiment['sentiment']}"}, gauge={'axis': {'range': [0, 100]},'bar': {'color': "darkblue"},'steps': [{'range': [0, 25], 'color': "#d62728"},{'range': [25, 45], 'color': "#ff7f0e"},{'range': [45, 55], 'color': "#f0de69"},{'range': [55, 75], 'color': "#aec7e8"},{'range': [75, 100], 'color': "#2ca02c"}],'threshold' : {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': sentiment['value']}})); fig_sent.update_layout(height=250, margin=dict(l=20, r=20, t=50, b=20)); st.plotly_chart(fig_sent, use_container_width=True)
 
     # Tab 2: Comparativos
     with tabs[1]:
         st.subheader("📌 BTC vs Ativos Tradicionais (Últimos 90 dias)")
-        if not traditional_assets.empty:
-             pivot_df = traditional_assets.pivot(index='date', columns='asset', values='value'); normalized_pivot = (pivot_df / pivot_df.iloc[0] * 100).ffill(); normalized_plot = normalized_pivot.reset_index().melt(id_vars='date', var_name='asset', value_name='normalized_value'); fig_comp = px.line(normalized_plot, x="date", y="normalized_value", color="asset", title="Desempenho Normalizado (Início = 100)", labels={'normalized_value': 'Performance Normalizada', 'date': 'Data', 'asset': 'Ativo'}); fig_comp.update_layout(hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)); st.plotly_chart(fig_comp, use_container_width=True)
+        if not traditional_assets.empty: pivot_df = traditional_assets.pivot(index='date', columns='asset', values='value'); normalized_pivot = (pivot_df / pivot_df.iloc[0] * 100).ffill(); normalized_plot = normalized_pivot.reset_index().melt(id_vars='date', var_name='asset', value_name='normalized_value'); fig_comp = px.line(normalized_plot, x="date", y="normalized_value", color="asset", title="Desempenho Normalizado (Início = 100)", labels={'normalized_value': 'Performance Normalizada', 'date': 'Data', 'asset': 'Ativo'}); fig_comp.update_layout(hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)); st.plotly_chart(fig_comp, use_container_width=True)
         else: st.warning("Dados comparativos não disponíveis.")
         st.subheader("🔄 Correlação entre Ativos (Últimos 90 dias)")
         if not traditional_assets.empty:
@@ -1003,8 +956,7 @@ def main():
         if 'backtest_results' in st.session_state and st.session_state.backtest_results is not None:
             df_results = st.session_state.backtest_results; metrics = calculate_metrics(df_results)
             if metrics:
-                 st.subheader("📊 Resultados Backtesting"); # Gráfico e Métricas
-                 fig_bt = go.Figure(); fig_bt.add_trace(go.Scatter(x=df_results['date'], y=df_results['strategy_cumulative'], name="Estratégia", line=dict(color='green', width=2))); fig_bt.add_trace(go.Scatter(x=df_results['date'], y=df_results['cumulative_return'], name="Buy & Hold", line=dict(color='blue', width=2))); fig_bt.update_layout(title=f"Desempenho: {strategy}", yaxis_title="Retorno Acumulado", hovermode="x unified"); st.plotly_chart(fig_bt, use_container_width=True)
+                 st.subheader("📊 Resultados Backtesting"); fig_bt = go.Figure(); fig_bt.add_trace(go.Scatter(x=df_results['date'], y=df_results['strategy_cumulative'], name="Estratégia", line=dict(color='green', width=2))); fig_bt.add_trace(go.Scatter(x=df_results['date'], y=df_results['cumulative_return'], name="Buy & Hold", line=dict(color='blue', width=2))); fig_bt.update_layout(title=f"Desempenho: {strategy}", yaxis_title="Retorno Acumulado", hovermode="x unified"); st.plotly_chart(fig_bt, use_container_width=True)
                  st.subheader("📈 Métricas"); m_col1, m_col2, m_col3 = st.columns(3); m_col1.metric("Retorno Estratégia", f"{metrics.get('Retorno Estratégia', 0):.2%}"); m_col2.metric("Retorno B&H", f"{metrics.get('Retorno Buy & Hold', 0):.2%}"); m_col3.metric("Sharpe Estratégia", f"{metrics.get('Sharpe Estratégia', 0):.2f}"); m_col4, m_col5, m_col6 = st.columns(3); m_col4.metric("Volatilidade", f"{metrics.get('Vol Estratégia', 0):.2%}"); m_col5.metric("Max Drawdown", f"{metrics.get('Max Drawdown Estratégia', 0):.2%}"); m_col6.metric("Taxa Acerto (Aprox.)", f"{metrics.get('Taxa Acerto (Trades Aprox.)', 0):.2%}")
             else: st.warning("Não foi possível calcular métricas.")
             st.divider(); st.subheader("⚙️ Otimização Automática (Experimental)")
@@ -1018,7 +970,7 @@ def main():
                 elif strategy == "Order Blocks": param_space = {'swing_length': range(7, 17, 4), 'use_body': [True, False]}
                 else: st.warning(f"Otimização não definida para {strategy}.")
                 if param_space:
-                    if strategy == 'MACD' and 'signal' in param_space: param_space['signal_macd_window'] = param_space.pop('signal') # Renomeia
+                    if strategy == 'MACD' and 'signal' in param_space: param_space['signal_macd_window'] = param_space.pop('signal')
                     best_params, best_sharpe, best_df = optimize_strategy_parameters(master_data, strategy, param_space)
                     if best_params:
                         st.success(f"🎯 Melhores parâmetros (Sharpe: {best_sharpe:.2f}):"); st.json(best_params)
@@ -1043,19 +995,16 @@ def main():
     with tabs[4]:
         st.header("🤖 Treinamento e Gerenciamento de Modelos IA")
         st.info("Use esta aba para treinar os modelos LSTM e RL. Os modelos treinados serão salvos localmente e carregados automaticamente nas próximas execuções.")
-        # --- Treinamento LSTM ---
         with st.container(border=True):
             st.subheader("🧠 Treinamento LSTM")
             if TF_AVAILABLE:
                 lstm_loaded = (lstm_model is not None and lstm_scaler is not None); status_lstm = "✅ Carregado" if lstm_loaded else "❌ Não Carregado"
                 st.write(f"Status Modelo LSTM: {status_lstm}")
                 if st.button("Iniciar Treinamento LSTM", key="train_lstm_button", disabled=not TF_AVAILABLE):
-                    if 'prices' in master_data and not master_data['prices'].empty:
-                         success = train_and_save_lstm(master_data['prices'], settings['lstm_window'], settings['lstm_epochs'], DEFAULT_SETTINGS['lstm_units'])
-                         if success: st.rerun()
+                    if 'prices' in master_data and not master_data['prices'].empty: success = train_and_save_lstm(master_data['prices'], settings['lstm_window'], settings['lstm_epochs'], DEFAULT_SETTINGS['lstm_units']);
+                    if success: st.rerun()
                     else: st.error("Dados de preço necessários para treino LSTM.")
             else: st.warning("TensorFlow/Keras indisponível.")
-        # --- Treinamento RL ---
         with st.container(border=True):
             st.subheader("🤖 Treinamento Agente RL (PPO)")
             if SB3_AVAILABLE and GYM_AVAILABLE and SKLEARN_AVAILABLE:
@@ -1069,12 +1018,10 @@ def main():
                                  if not all(c in df_rl_train.columns for c in feature_cols_base): raise ValueError(f"Colunas RL ausentes: {feature_cols_base}")
                                  df_rl_train.dropna(subset=feature_cols_base, inplace=True); df_rl_train = df_rl_train.reset_index(drop=True)
                                  if len(df_rl_train) < 100: raise ValueError("Dados insuficientes pós limpeza.")
-                                 scaler_rl = StandardScaler(); scaler_rl.fit(df_rl_train[feature_cols_base]) # Fit scaler
-                                 joblib.dump(scaler_rl, RL_SCALER_PATH) # Save scaler
-                                 # Normaliza para treino (mas ambiente usará o scaler salvo)
-                                 # df_rl_train[RL_OBSERVATION_COLS_NORM] = scaler_rl.transform(df_rl_train[feature_cols_base])
-                                 env_config = {'feature_cols': RL_OBSERVATION_COLS_NORM}; joblib.dump(env_config, RL_ENV_CONFIG_PATH) # Save config
-                                 env_train = BitcoinTradingEnv(df_rl_train, RL_OBSERVATION_COLS_NORM, scaler_rl, settings['rl_transaction_cost']) # Passa scaler
+                                 scaler_rl = StandardScaler(); scaler_rl.fit(df_rl_train[feature_cols_base])
+                                 joblib.dump(scaler_rl, RL_SCALER_PATH)
+                                 env_config = {'feature_cols': RL_OBSERVATION_COLS_NORM}; joblib.dump(env_config, RL_ENV_CONFIG_PATH)
+                                 env_train = BitcoinTradingEnv(df_rl_train, RL_OBSERVATION_COLS_NORM, scaler_rl, settings['rl_transaction_cost'])
                                  vec_env_train = DummyVecEnv([lambda: env_train])
                              except Exception as e: st.error(f"Erro preparação RL: {e}"); st.stop()
                          try: # Treinamento
@@ -1088,7 +1035,6 @@ def main():
                          finally: progress_bar_rl.empty(); status_text_rl.empty()
                     else: st.error("Dados de preço necessários para treino RL.")
             else: st.warning("SB3/Gym/SKlearn indisponível.")
-        # --- Status Sentimento ---
         with st.container(border=True):
             st.subheader("📰 Modelo Análise Sentimento")
             if TRANSFORMERS_AVAILABLE: status_sent = "✅ Carregado" if sentiment_model else "❌ Falha"; st.write(f"Status: {status_sent}")
@@ -1100,28 +1046,19 @@ def main():
         if 'prices' not in master_data or master_data['prices'].empty: st.warning("Dados ausentes.")
         else:
             df_tech = master_data['prices']; num_cols = 2; cols = st.columns(num_cols); plot_idx = 0
-            def add_tech_plot(figure, title): # Helper
-                nonlocal plot_idx;
-                if figure: cols[plot_idx % num_cols].plotly_chart(figure, use_container_width=True)
-                plot_idx += 1
-            # RSI
+            def add_tech_plot(figure, title): nonlocal plot_idx;
+            if figure: cols[plot_idx % num_cols].plotly_chart(figure, use_container_width=True); plot_idx += 1
             rsi_col = f'RSI_{settings["rsi_window"]}';
             if rsi_col in df_tech.columns: fig = px.line(df_tech, x="date", y=rsi_col, title=f"RSI ({settings['rsi_window']})", range_y=[0, 100]); fig.add_hline(y=70, line_dash="dash", line_color="red", opacity=0.5); fig.add_hline(y=30, line_dash="dash", line_color="green", opacity=0.5); fig.update_layout(height=300, margin=dict(t=30, b=20)); add_tech_plot(fig, f"RSI ({settings['rsi_window']})")
-            # MACD
             if 'MACD' in df_tech.columns and 'MACD_Signal' in df_tech.columns: fig = go.Figure(); fig.add_trace(go.Scatter(x=df_tech['date'], y=df_tech['MACD'], name="MACD", line_color='blue')); fig.add_trace(go.Scatter(x=df_tech['date'], y=df_tech['MACD_Signal'], name="Signal", line_color='red')); macd_hist = df_tech['MACD'] - df_tech['MACD_Signal']; colors = ['green' if v >= 0 else 'red' for v in macd_hist]; fig.add_trace(go.Bar(x=df_tech['date'], y=macd_hist, name='Hist', marker_color=colors)); fig.update_layout(title="MACD (12, 26, 9)", height=300, margin=dict(t=30, b=20)); add_tech_plot(fig, "MACD")
-            # Bollinger
             bb_col_u, bb_col_l = f'BB_Upper_{settings["bb_window"]}', f'BB_Lower_{settings["bb_window"]}';
             if bb_col_u in df_tech.columns and bb_col_l in df_tech.columns: fig = go.Figure(); fig.add_trace(go.Scatter(x=df_tech['date'], y=df_tech['price'], name="Preço", line=dict(color='orange'))); fig.add_trace(go.Scatter(x=df_tech['date'], y=df_tech[bb_col_u], name="Sup", line=dict(color='lightblue', width=1))); fig.add_trace(go.Scatter(x=df_tech['date'], y=df_tech[bb_col_l], name="Inf", line=dict(color='lightblue', width=1), fill='tonexty', fillcolor='rgba(173,216,230,0.1)')); fig.update_layout(title=f"Bollinger ({settings['bb_window']})", height=300, margin=dict(t=30, b=20)); add_tech_plot(fig, f"Bollinger ({settings['bb_window']})")
-            # Stochastic
             stoch_k_col, stoch_d_col = 'Stoch_K_14_3', 'Stoch_D_14_3';
             if stoch_k_col in df_tech.columns and stoch_d_col in df_tech.columns: fig = go.Figure(); fig.add_trace(go.Scatter(x=df_tech['date'], y=df_tech[stoch_k_col], name="%K", line_color='blue')); fig.add_trace(go.Scatter(x=df_tech['date'], y=df_tech[stoch_d_col], name="%D", line_color='red')); fig.add_hline(y=80, line_dash="dash", line_color="red", opacity=0.5); fig.add_hline(y=20, line_dash="dash", line_color="green", opacity=0.5); fig.update_layout(title="Stochastic (14, 3)", height=300, margin=dict(t=30, b=20), range_y=[0,100]); add_tech_plot(fig, "Stochastic")
-            # Volume
             if 'volume' in df_tech.columns: fig = px.bar(df_tech, x="date", y="volume", title="Volume"); vol_ma_col = 'Volume_MA_20';
             if vol_ma_col in df_tech.columns: fig.add_trace(go.Scatter(x=df_tech['date'], y=df_tech[vol_ma_col], name='Vol MA20', line=dict(color='red'))); fig.update_layout(height=300, margin=dict(t=30, b=20)); add_tech_plot(fig, "Volume")
-            # OBV
             if 'OBV' in df_tech.columns: fig = px.line(df_tech, x="date", y="OBV", title="OBV"); obv_ma_col = 'OBV_MA_20';
             if obv_ma_col in df_tech.columns: fig.add_trace(go.Scatter(x=df_tech['date'], y=df_tech[obv_ma_col], name='OBV MA20', line=dict(color='red'))); fig.update_layout(height=300, margin=dict(t=30, b=20)); add_tech_plot(fig, "OBV")
-            # Gaussian Process
             gp_pred_col = f'GP_Prediction_{settings["gp_window"]}';
             if gp_pred_col in df_tech.columns: fig = go.Figure(); fig.add_trace(go.Scatter(x=df_tech['date'], y=df_tech['price'], name="Preço", line=dict(color='blue', width=1))); fig.add_trace(go.Scatter(x=df_tech['date'], y=df_tech[gp_pred_col], name="Pred GP", line=dict(color='purple', dash='dot'))); fig.update_layout(title=f"Predição GP ({settings['gp_window']}d)", height=300, margin=dict(t=30, b=20)); add_tech_plot(fig, "Gaussian Process")
 
@@ -1134,8 +1071,6 @@ def main():
                 pdf_path = generate_pdf_report(master_data, signals, final_verdict, settings)
                 if pdf_path and os.path.exists(pdf_path):
                     with open(pdf_path, "rb") as pdf_file: st.download_button(label="Baixar Relatório PDF", data=pdf_file, file_name=f"btc_ai_report_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf", mime="application/octet-stream", key='dl_pdf')
-                    # try: os.remove(pdf_path) # Tenta remover o temp file
-                    # except Exception as e: st.warning(f"Não foi possível remover arquivo PDF temporário: {e}")
                 else: st.error("Falha ao gerar PDF.")
         st.divider(); st.subheader("💾 Dados em Excel (.xlsx)"); st.caption("Exporta os DataFrames para Excel.")
         if st.button("Exportar Dados para Excel", key='bt_excel'):
@@ -1151,18 +1086,8 @@ def main():
                             if 'support_resistance' in master_data and master_data['support_resistance']: pd.DataFrame({'SR_Level': master_data['support_resistance']}).to_excel(writer, sheet_name="Support_Resistance", index=False)
                             if analyzed_news: pd.DataFrame(analyzed_news).to_excel(writer, sheet_name="News_Sentiment", index=False)
                             if 'backtest_results' in st.session_state and st.session_state.backtest_results is not None: st.session_state.backtest_results.to_excel(writer, sheet_name="Last_Backtest", index=False)
-                    # Lê o arquivo salvo para download
-                    with open(excel_path, "rb") as excel_file:
-                        st.download_button(label="Baixar Arquivo Excel", data=excel_file, file_name=f"btc_ai_data_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key='dl_excel')
-                    # try: os.remove(excel_path) # Tenta remover temp file
-                    # except Exception as e: st.warning(f"Não foi possível remover arquivo Excel temporário: {e}")
+                    with open(excel_path, "rb") as excel_file: st.download_button(label="Baixar Arquivo Excel", data=excel_file, file_name=f"btc_ai_data_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key='dl_excel')
                  except Exception as e: st.error(f"Erro ao gerar Excel: {e}")
 
 if __name__ == "__main__":
-    # Opcional: Configurar TF para limitar GPU (descomente se necessário)
-    # if TF_AVAILABLE:
-    #    try:
-    #        gpus = tf.config.list_physical_devices('GPU')
-    #        if gpus: tf.config.experimental.set_memory_growth(gpus[0], True) # Ou set_logical_device_configuration
-    #    except Exception as e: print(f"TF GPU Config Error: {e}")
     main()
