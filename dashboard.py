@@ -56,7 +56,7 @@ except ImportError: st.warning("PyTorch não encontrado.")
 # CONSTANTES E CONFIGS
 # ======================
 st.set_page_config(layout="wide", page_title="BTC AI Dashboard Pro+")
-st.title("🚀 BTC AI Dashboard Pro+ v2.3 - Final") # Versão incrementada
+st.title("🚀 BTC AI Dashboard Pro+ v2.3 - Colunas Corrigidas") # Versão incrementada
 
 # Arquivos e Diretórios
 BASE_DIR = os.path.dirname(os.path.abspath(__file__)); MODEL_DIR = os.path.join(BASE_DIR, "saved_models"); os.makedirs(MODEL_DIR, exist_ok=True)
@@ -335,9 +335,9 @@ def get_traditional_assets():
     for name, ticker in assets.items():
         try:
             data_yf = yf.download(ticker, start=start_date, end=end_date, interval="1d", progress=False)
-            # *** CORREÇÃO APLICADA AQUI: Indentação correta do IF ***
+            # *** CORREÇÃO APLICADA: Indentação correta do IF ***
             if not data_yf.empty and 'Close' in data_yf.columns:
-                data_proc = data_yf['Close'].resample('1D').ffill().to_frame()
+                data_proc = data_yf['Close'].resample('1D').ffill().to_frame() # Usa variável diferente
                 data_proc = data_proc.reset_index().rename(columns={'Close': 'value', 'Date': 'date'})
                 data_proc['date'] = pd.to_datetime(data_proc['date']).dt.normalize()
                 data_proc['asset'] = name
@@ -345,9 +345,7 @@ def get_traditional_assets():
             # *** FIM DA CORREÇÃO ***
         except Exception as e:
             st.warning(f"Falha ao buscar {name} ({ticker}): {e}")
-            # Continua para o próximo ativo se houver erro
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
-
 
 # --- Funções Backtesting ---
 def calculate_daily_returns(df): # ... (mantida) ...
@@ -466,14 +464,15 @@ def optimize_strategy_parameters(data, strategy_name, param_space): # ... (manti
     else: st.warning("Nenhuma combinação válida.")
     return best_params, best_sharpe, best_results_df
 
-# --- Carregamento de Dados ---
+# --- Carregamento de Dados (com correção erro tuple) ---
 @st.cache_data(ttl=3600, show_spinner="Carregando e processando dados de mercado...")
 def load_and_process_data():
-    data = {'prices': pd.DataFrame()}
+    data = {'prices': pd.DataFrame()} # Inicia com DF vazio
     try:
         ticker = "BTC-USD"; btc_data_raw = yf.download(ticker, period="1y", interval="1d", progress=False)
         if not isinstance(btc_data_raw, pd.DataFrame) or btc_data_raw.empty: raise ValueError(f"yfinance não retornou DataFrame para {ticker}.")
         btc_data = btc_data_raw.copy()
+        # --- CORREÇÃO ERRO TUPLE / COLUNAS ---
         column_map = {'open': ['Open', 'open'],'high': ['High', 'high'],'low': ['Low', 'low'],'close': ['Close', 'close'],'volume': ['Volume', 'volume']}
         renamed_cols = {}; found_cols = {}
         for standard_name, possible_names in column_map.items():
@@ -485,6 +484,7 @@ def load_and_process_data():
         required_ohlcv = ['open', 'high', 'low', 'close', 'volume']
         missing_cols = [col for col in required_ohlcv if col not in btc_data.columns]
         if missing_cols: raise ValueError(f"Colunas OHLCV ausentes: {missing_cols}. Disponíveis: {list(btc_data.columns)}")
+        # --- FIM CORREÇÃO COLUNAS ---
         btc_data.reset_index(inplace=True); date_col = 'Date' if 'Date' in btc_data.columns else 'index' if 'index' in btc_data.columns else None
         if not date_col: raise ValueError("Coluna Date/index não encontrada.")
         btc_data.rename(columns={date_col: 'date'}, inplace=True)
@@ -592,31 +592,72 @@ def clean_text(text): # Mantida
     if text is None: return ""
     try: text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]', '', str(text)); return str(text).encode('latin-1', 'ignore').decode('latin-1')
     except: return re.sub(r'[^\x20-\x7E]+', '', str(text))
-def generate_pdf_report(data, signals, final_verdict, settings): # Mantida
-    pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", 'B', 16); pdf.cell(0, 10, txt="Relatório BTC AI Dashboard Pro+ v2.1", ln=1, align='C'); pdf.ln(5)
-    pdf.set_font("Arial", size=10); pdf.cell(0, 5, txt=f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", ln=1, align='C'); pdf.ln(10)
-    pdf.set_font("Arial", 'B', 12); current_price = data.get('prices', pd.DataFrame()).iloc[-1].get('price', 'N/A'); price_txt = f"${current_price:,.2f}" if isinstance(current_price, (float, int)) else "Indisponível"
-    pdf.cell(0, 7, txt=f"Preço Atual BTC/USD: {price_txt}", ln=1); pdf.cell(0, 7, txt=f"Sinal Consolidado Atual: {clean_text(final_verdict)}", ln=1); pdf.ln(5)
-    pdf.set_font("Arial", 'B', 11); pdf.cell(0, 7, txt="Configurações Principais:", ln=1); pdf.set_font("Arial", size=9)
-    settings_text = f"- RSI:{settings.get('rsi_window','N/A')}, BB:{settings.get('bb_window','N/A')}, MAs:{settings.get('ma_windows', 'N/A')}\n- OB Swing:{settings.get('ob_swing_length','N/A')}, Clusters:{settings.get('n_clusters','N/A')}, GP Win:{settings.get('gp_window','N/A')}\n- LSTM Win:{settings.get('lstm_window','N/A')}, RL Steps:{settings.get('rl_total_timesteps','N/A')}"
-    pdf.multi_cell(0, 5, txt=clean_text(settings_text)); pdf.ln(5); pdf.set_font("Arial", 'B', 11); pdf.cell(0, 7, txt="Sinais Individuais:", ln=1); pdf.set_font("Arial", size=9)
+
+# --- CORREÇÃO SyntaxError ---
+def generate_pdf_report(data, signals, final_verdict, settings):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 10, txt="Relatório BTC AI Dashboard Pro+ v2.1", ln=1, align='C')
+    pdf.ln(5)
+    pdf.set_font("Arial", size=10)
+    pdf.cell(0, 5, txt=f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", ln=1, align='C')
+    pdf.ln(10)
+    pdf.set_font("Arial", 'B', 12)
+    current_price = data.get('prices', pd.DataFrame()).iloc[-1].get('price', 'N/A')
+    price_txt = f"${current_price:,.2f}" if isinstance(current_price, (float, int)) else "Indisponível"
+    pdf.cell(0, 7, txt=f"Preço Atual BTC/USD: {price_txt}", ln=1)
+    pdf.cell(0, 7, txt=f"Sinal Consolidado Atual: {clean_text(final_verdict)}", ln=1)
+    pdf.ln(5)
+    pdf.set_font("Arial", 'B', 11)
+    pdf.cell(0, 7, txt="Configurações Principais:", ln=1)
+    pdf.set_font("Arial", size=9)
+    settings_text = (
+        f"- RSI:{settings.get('rsi_window','N/A')}, BB:{settings.get('bb_window','N/A')}, MAs:{settings.get('ma_windows', 'N/A')}\n"
+        f"- OB Swing:{settings.get('ob_swing_length','N/A')}, Clusters:{settings.get('n_clusters','N/A')}, GP Win:{settings.get('gp_window','N/A')}\n"
+        f"- LSTM Win:{settings.get('lstm_window','N/A')}, RL Steps:{settings.get('rl_total_timesteps','N/A')}"
+    )
+    pdf.multi_cell(0, 5, txt=clean_text(settings_text))
+    pdf.ln(5)
+    pdf.set_font("Arial", 'B', 11)
+    pdf.cell(0, 7, txt="Sinais Individuais:", ln=1)
+    pdf.set_font("Arial", size=9)
     if signals:
-        for signal in signals: c_name=clean_text(signal.get('name','N/A')); c_val=clean_text(signal.get('signal','N/A')); c_det=clean_text(str(signal.get('value',''))); w=signal.get('weight',0); s=signal.get('score',0); pdf.cell(0, 5, txt=f"- {c_name}: {c_val} ({c_det}) | W:{w:.1f}, S:{s:.2f}", ln=1)
-    else: pdf.cell(0, 5, txt="- Nenhum sinal gerado.", ln=1)
-    pdf.ln(5); pdf.set_font("Arial", 'B', 11); pdf.cell(0, 7, txt="Zonas S/R (K-Means):", ln=1); pdf.set_font("Arial", size=9); sr_levels = data.get('support_resistance', [])
-    if sr_levels: pdf.multi_cell(0, 5, txt=", ".join([f"${lvl:,.0f}" for lvl in sr_levels]))
-    else: pdf.cell(0, 5, txt="- Nenhuma zona identificada.", ln=1)
-    pdf.ln(5); pdf.set_font("Arial", 'I', 8); pdf.ln(10); pdf.multi_cell(0, 4, txt=clean_text("Disclaimer: Relatório gerado automaticamente apenas para fins informativos. Não constitui aconselhamento financeiro."))
+        for signal in signals:
+            c_name = clean_text(signal.get('name', 'N/A'))
+            c_val = clean_text(signal.get('signal', 'N/A'))
+            c_det = clean_text(str(signal.get('value', '')))
+            w = signal.get('weight', 0)
+            s = signal.get('score', 0)
+            pdf.cell(0, 5, txt=f"- {c_name}: {c_val} ({c_det}) | W:{w:.1f}, S:{s:.2f}", ln=1)
+    else:
+        pdf.cell(0, 5, txt="- Nenhum sinal gerado.", ln=1)
+    pdf.ln(5)
+    pdf.set_font("Arial", 'B', 11)
+    pdf.cell(0, 7, txt="Zonas S/R (K-Means):", ln=1)
+    pdf.set_font("Arial", size=9)
+    sr_levels = data.get('support_resistance', [])
+    if sr_levels:
+        pdf.multi_cell(0, 5, txt=", ".join([f"${lvl:,.0f}" for lvl in sr_levels]))
+    else:
+        pdf.cell(0, 5, txt="- Nenhuma zona identificada.", ln=1)
+    pdf.ln(5)
+    pdf.set_font("Arial", 'I', 8)
+    pdf.ln(10)
+    pdf.multi_cell(0, 4, txt=clean_text(
+        "Disclaimer: Relatório gerado automaticamente apenas para fins informativos. Não constitui aconselhamento financeiro."
+    ))
+    # *** CORREÇÃO SyntaxError: Bloco try agora tem conteúdo indentado ***
     try:
-        # *** CORREÇÃO SyntaxError: Bloco try agora tem conteúdo indentado ***
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             pdf_output_path = tmp.name
             pdf.output(pdf_output_path) # Gera o PDF no arquivo temporário
-            return pdf_output_path # Retorna o caminho do arquivo
-        # *** FIM DA CORREÇÃO ***
+        return pdf_output_path # Retorna o caminho do arquivo
+    # *** FIM DA CORREÇÃO ***
     except Exception as e:
         st.error(f"Erro ao salvar PDF: {e}")
         return None
+
 
 # ======================
 # |||| LOOP PRINCIPAL ||||
