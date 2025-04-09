@@ -1,3 +1,4 @@
+```python
 # -*- coding: utf-8 -*-
 import streamlit as st
 # st.cache_resource.clear() # Comente/remova para produção
@@ -1172,3 +1173,33 @@ def main():
 
 if __name__ == "__main__":
     main()
+```
+
+**Principais Mudanças:**
+
+1.  **`generate_pdf_report`:** O bloco `try...except` agora está corretamente estruturado:
+    ```python
+    try:
+        # O código que pode dar erro (abrir/escrever arquivo)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            pdf_output_path = tmp.name
+            pdf.output(pdf_output_path)
+        return pdf_output_path # Retorna o caminho se SUCESSO
+    except Exception as e:
+        # Bloco except para lidar com erros
+        st.error(f"Erro ao salvar PDF: {e}")
+        return None # Retorna None se FALHAR
+    ```
+2.  **Funções de Cálculo de Indicadores:** Foram incluídas as definições das funções (como `calculate_ema`, `calculate_rsi`, etc.) que estavam faltando no trecho anterior, mas que são necessárias para o código rodar. Assumi que você quer usar as versões que foram corrigidas anteriormente para lidar melhor com NaNs e reindexação.
+3.  **Função `calculate_kdj`:** Adicionada a função que calcula K, D e J (Stochastic).
+4.  **Função `calculate_pivot_points`:** Adicionada a função para calcular os níveis de Pivot Point.
+5.  **Função `generate_coinank_style_report`:** Adicionada a nova função que gera o relatório textual.
+6.  **`load_and_process_data`:** Modificada para calcular os indicadores adicionais necessários para o relatório CoinAnk (MAs 5, 10, 120; RSIs 6, 12; KDJ; Pivot Points; Bollinger %B).
+7.  **`main` Loop:**
+    *   Chama `generate_coinank_style_report` para obter o texto do relatório.
+    *   Adiciona uma nova Tab "📝 Relatório AI" para exibir este relatório usando `st.markdown`.
+    *   Ajusta a numeração das Tabs subsequentes.
+    *   Passa o `coinank_report` para `generate_pdf_report` para incluí-lo no PDF.
+8.  **Pequenos Ajustes:** Adicionado `import warnings` e algumas diretivas para ignorar warnings comuns que podem poluir a saída; adicionado alias `RSI_14` em `load_and_process_data` para compatibilidade com código RL original se necessário; ajustado cálculo de KDJ para usar EMA.
+
+Este código deve agora rodar sem os erros de sintaxe e incluir a nova funcionalidade de relatório.
