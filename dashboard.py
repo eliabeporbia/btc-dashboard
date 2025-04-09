@@ -304,7 +304,7 @@ def detect_support_resistance_clusters(price_data, n_clusters=5):
 def calculate_gaussian_process(price_series, window=30, lookahead=5):
     """Previsão usando Gaussian Process."""
     if len(price_series) < window + lookahead:
-        return np.array([])
+        return np.nan * np.zeros(len(price_series))
     
     X = np.arange(window).reshape(-1, 1)
     y = price_series[-window:].values
@@ -316,7 +316,12 @@ def calculate_gaussian_process(price_series, window=30, lookahead=5):
     X_pred = np.arange(window, window + lookahead).reshape(-1, 1)
     y_pred = gp.predict(X_pred)
     
-    return y_pred
+    # Criar série completa com NaN para valores não previstos
+    full_pred = np.empty(len(price_series))
+    full_pred[:] = np.nan
+    full_pred[-lookahead:] = y_pred
+    
+    return full_pred
 
 # ======================
 # FUNÇÕES PRINCIPAIS
@@ -393,11 +398,12 @@ def main():
             data['prices_full']['Stoch_K'], data['prices_full']['Stoch_D'] = k, d
             
             # GP Prediction (apenas nos dados recentes)
-            data['prices']['GP_Prediction'] = calculate_gaussian_process(
+            gp_pred = calculate_gaussian_process(
                 data['prices']['price'], 
                 window=st.session_state.user_settings['gp_window'],
                 lookahead=st.session_state.user_settings['gp_lookahead']
             )
+            data['prices']['GP_Prediction'] = gp_pred[-len(data['prices']):]  # Garantir comprimento correto
             
             # Divergências RSI
             rsi14_recent = data['prices_full']['RSI_14'].reindex(data['prices'].index)
@@ -421,6 +427,7 @@ def main():
             
         except Exception as e:
             st.error(f"Erro crítico ao carregar dados: {str(e)}")
+            traceback.print_exc()
             return {'prices': pd.DataFrame(), 'prices_full': pd.DataFrame()}
 
     data = load_cached_data()
@@ -467,6 +474,16 @@ def main():
                 line=dict(width=1),
                 visible='legendonly'
             ))
+    
+    # Adicionar previsão GP se disponível
+    if 'GP_Prediction' in data['prices'].columns:
+        fig.add_trace(go.Scatter(
+            x=data['prices'].index,
+            y=data['prices']['GP_Prediction'],
+            name="Previsão GP",
+            line=dict(color='orange', dash='dot'),
+            visible='legendonly'
+        ))
     
     fig.update_layout(
         title="BTC/USD - Preço e Indicadores",
