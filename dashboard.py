@@ -74,7 +74,7 @@ DEFAULT_SETTINGS = {
 
 def display_asset_metric(column, asset_name, assets_df):
     """Exibe métrica para um ativo tradicional."""
-    if assets_df is None or asset_name not in assets_df['asset'].values:
+    if assets_df is None or not isinstance(assets_df, pd.DataFrame) or asset_name not in assets_df['asset'].values:
         column.metric(asset_name, "N/A")
         return
     
@@ -176,7 +176,7 @@ class BitcoinTradingEnv(gym.Env):
             (self.btc_held * price) / self.initial_balance,
             self.current_step / (len(self.df) - 1 if len(self.df) > 1 else 1),
             bb_upper / (price if price else 1),
-            bb_lower / (price if price else 1),
+            bb_lower / (price if price else 1)
         ], dtype=np.float32)
 
         return np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=-1.0)
@@ -228,11 +228,7 @@ class BitcoinTradingEnv(gym.Env):
     def close(self):
         pass
 
-# ... (continua com o resto das funções, mantendo a mesma estrutura mas com verificações robustas)
-
-# ======================
-# FUNÇÃO PRINCIPAL
-# ======================
+# ... (continuação com todas as outras funções)
 
 def main():
     # Inicializar estado da sessão
@@ -268,7 +264,7 @@ def main():
                 st.error("Falha ao obter dados do Yahoo Finance")
                 return {'prices': pd.DataFrame(), 'prices_full': pd.DataFrame()}
                 
-            # Processamento dos dados (igual ao original)
+            # Processamento dos dados
             hist = hist.rename(columns={
                 'Open': 'open', 'High': 'high', 'Low': 'low',
                 'Close': 'price', 'Volume': 'volume', 'Adj Close': 'adj_close'
@@ -279,9 +275,58 @@ def main():
             
             data = {'prices_full': hist.copy(), 'prices': hist.tail(180).copy()}
             
-            # Calcular indicadores (igual ao original)
-            # ...
+            # Calcular indicadores técnicos
+            price_full = data['prices_full']['price']
+            vol_full = data['prices_full']['volume']
+
+            # EMAs
+            for window in [7, 14, 20, 30, 50, 100, 200]:
+                data['prices_full'][f'MA{window}'] = calculate_ema(price_full, window)
             
+            # RSI
+            for window in [6, 12, 14, 24]:
+                data['prices_full'][f'RSI_{window}'] = calculate_rsi(price_full, window)
+            
+            # MACD
+            macd, macd_s, macd_h = calculate_macd(price_full)
+            data['prices_full']['MACD'], data['prices_full']['MACD_Signal'], data['prices_full']['MACD_Hist'] = macd, macd_s, macd_h
+            
+            # Bollinger Bands
+            bb_up, bb_low, bb_ma = calculate_bollinger_bands(price_full, window=20)
+            data['prices_full']['BB_Upper_20'], data['prices_full']['BB_Lower_20'], data['prices_full']['BB_MA_20'] = bb_up, bb_low, bb_ma
+            
+            # OBV
+            data['prices_full']['OBV'] = calculate_obv(price_full, vol_full)
+            
+            # Stochastic
+            k, d = calculate_stochastic(price_full)
+            data['prices_full']['Stoch_K'], data['prices_full']['Stoch_D'] = k, d
+            
+            # GP Prediction (apenas nos dados recentes)
+            data['prices']['GP_Prediction'] = calculate_gaussian_process(
+                data['prices']['price'], 
+                window=st.session_state.user_settings['gp_window'],
+                lookahead=st.session_state.user_settings['gp_lookahead']
+            )
+            
+            # Divergências RSI
+            rsi14_recent = data['prices_full']['RSI_14'].reindex(data['prices'].index)
+            data['prices']['RSI_Divergence'] = detect_divergences(data['prices']['price'], rsi14_recent)
+            
+            # S/R Clusters
+            data['support_resistance'] = detect_support_resistance_clusters(
+                data['prices']['price'].tail(90).values,
+                n_clusters=st.session_state.user_settings.get('n_clusters', 5)
+            )
+            
+            # Variação 24h
+            if len(data['prices']) >= 2:
+                last_price = data['prices']['price'].iloc[-1]
+                prev_price = data['prices']['price'].iloc[-2]
+                data['24h_change'] = ((last_price / prev_price) - 1) * 100 if prev_price else 0.0
+            else:
+                data['24h_change'] = 0.0
+                
             return data
             
         except Exception as e:
