@@ -1,7 +1,4 @@
-# -*- coding: utf-8 -*-
 import streamlit as st
-# st.cache_resource.clear() # Comente/remova para produção
-
 import requests
 import pandas as pd
 import numpy as np
