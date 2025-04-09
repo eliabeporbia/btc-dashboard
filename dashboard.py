@@ -221,14 +221,106 @@ class BitcoinTradingEnv(gym.Env):
         return observation, reward, terminated, truncated, info
 
     def _render_frame(self):
-        current_price = self.df.iloc[min(self.current_step, len(self.df)-1]['price']
+        current_price = self.df.iloc[min(self.current_step, len(self.df)-1)]['price']
         portfolio_value = self.balance + self.btc_held * current_price
         print(f"Step: {self.current_step}, Price: {current_price:.2f}, Balance: {self.balance:.2f}, BTC: {self.btc_held:.6f}, Portfolio: {portfolio_value:.2f}, Profit: {self.total_profit:.2f}")
 
     def close(self):
         pass
 
-# ... (continuação com todas as outras funções)
+# ======================
+# FUNÇÕES DE ANÁLISE TÉCNICA
+# ======================
+
+def calculate_ema(series, window):
+    """Calcula a Média Móvel Exponencial."""
+    return series.ewm(span=window, adjust=False).mean()
+
+def calculate_rsi(series, window=14):
+    """Calcula o Índice de Força Relativa."""
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+def calculate_macd(series, fast=12, slow=26, signal=9):
+    """Calcula MACD, linha de sinal e histograma."""
+    ema_fast = calculate_ema(series, fast)
+    ema_slow = calculate_ema(series, slow)
+    macd = ema_fast - ema_slow
+    macd_signal = calculate_ema(macd, signal)
+    macd_hist = macd - macd_signal
+    return macd, macd_signal, macd_hist
+
+def calculate_bollinger_bands(series, window=20, num_std=2):
+    """Calcula Bollinger Bands."""
+    rolling_mean = series.rolling(window=window).mean()
+    rolling_std = series.rolling(window=window).std()
+    upper_band = rolling_mean + (rolling_std * num_std)
+    lower_band = rolling_mean - (rolling_std * num_std)
+    return upper_band, lower_band, rolling_mean
+
+def calculate_obv(price_series, volume_series):
+    """Calcula On Balance Volume."""
+    obv = (volume_series * (~price_series.diff().le(0) * 2 - 1)).cumsum()
+    return obv
+
+def calculate_stochastic(price_series, k_window=14, d_window=3):
+    """Calcula Stochastic Oscillator."""
+    low_min = price_series.rolling(window=k_window).min()
+    high_max = price_series.rolling(window=k_window).max()
+    stoch_k = 100 * ((price_series - low_min) / (high_max - low_min))
+    stoch_d = stoch_k.rolling(window=d_window).mean()
+    return stoch_k, stoch_d
+
+def detect_divergences(price_series, indicator_series, lookback=14):
+    """Detecta divergências entre preço e indicador."""
+    price_peaks = (price_series.shift(1) < price_series) & (price_series > price_series.shift(-1))
+    price_troughs = (price_series.shift(1) > price_series) & (price_series < price_series.shift(-1))
+    
+    indicator_peaks = (indicator_series.shift(1) < indicator_series) & (indicator_series > indicator_series.shift(-1))
+    indicator_troughs = (indicator_series.shift(1) > indicator_series) & (indicator_series < indicator_series.shift(-1))
+    
+    bearish_div = (price_peaks & indicator_troughs).rolling(lookback).max()
+    bullish_div = (price_troughs & indicator_peaks).rolling(lookback).max()
+    
+    return bearish_div - bullish_div
+
+def detect_support_resistance_clusters(price_data, n_clusters=5):
+    """Identifica níveis de suporte e resistência usando clustering."""
+    if len(price_data) < n_clusters:
+        return np.array([])
+    
+    scaler = StandardScaler()
+    scaled_data = scaler.fit_transform(price_data.reshape(-1, 1))
+    
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    clusters = kmeans.fit_predict(scaled_data)
+    
+    cluster_centers = scaler.inverse_transform(kmeans.cluster_centers_)
+    return np.sort(cluster_centers.flatten())
+
+def calculate_gaussian_process(price_series, window=30, lookahead=5):
+    """Previsão usando Gaussian Process."""
+    if len(price_series) < window + lookahead:
+        return np.array([])
+    
+    X = np.arange(window).reshape(-1, 1)
+    y = price_series[-window:].values
+    
+    kernel = ConstantKernel(1.0) * RBF(length_scale=1.0)
+    gp = GaussianProcessRegressor(kernel=kernel, alpha=1e-5, normalize_y=True)
+    gp.fit(X, y)
+    
+    X_pred = np.arange(window, window + lookahead).reshape(-1, 1)
+    y_pred = gp.predict(X_pred)
+    
+    return y_pred
+
+# ======================
+# FUNÇÕES PRINCIPAIS
+# ======================
 
 def main():
     # Inicializar estado da sessão
@@ -249,8 +341,6 @@ def main():
         st.session_state.user_settings['lstm_epochs'] = st.slider("Épocas LSTM", 10, 100, st.session_state.user_settings.get('lstm_epochs', 50), 10, key='cfg_lstm_e')
         st.session_state.user_settings['lstm_units'] = st.slider("Unidades LSTM", 30, 100, st.session_state.user_settings.get('lstm_units', 50), 10, key='cfg_lstm_u')
         st.session_state.user_settings['rl_episodes'] = st.slider("Timesteps RL", 5000, 50000, st.session_state.user_settings.get('rl_episodes', 10000), 1000, key='cfg_rl_ts')
-
-    # ... (restante do código do sidebar)
 
     # Carregar dados
     @st.cache_data(ttl=1800, show_spinner="Carregando dados de mercado...")
@@ -340,7 +430,52 @@ def main():
         st.error("Falha crítica ao carregar dados. O dashboard não pode continuar.")
         st.stop()
 
-    # ... (restante do código principal)
+    # Exibir dados principais
+    st.header("📊 Análise de Mercado em Tempo Real")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        current_price = data['prices']['price'].iloc[-1]
+        st.metric("Preço Atual BTC", f"${current_price:,.2f}")
+    
+    with col2:
+        if '24h_change' in data:
+            change_color = "red" if data['24h_change'] < 0 else "green"
+            st.metric("Variação 24h", f"{data['24h_change']:.2f}%", delta_color=change_color)
+    
+    with col3:
+        current_volume = data['prices']['volume'].iloc[-1]
+        st.metric("Volume 24h", f"${current_volume:,.0f}")
+
+    # Gráfico de preços
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=data['prices'].index,
+        y=data['prices']['price'],
+        name="Preço BTC",
+        line=dict(color='#00cc96')
+    ))
+    
+    # Adicionar médias móveis
+    for window in [7, 30, 200]:
+        if f'MA{window}' in data['prices_full'].columns:
+            ma_data = data['prices_full'][f'MA{window}'].reindex(data['prices'].index)
+            fig.add_trace(go.Scatter(
+                x=data['prices'].index,
+                y=ma_data,
+                name=f"MA {window}",
+                line=dict(width=1),
+                visible='legendonly'
+            ))
+    
+    fig.update_layout(
+        title="BTC/USD - Preço e Indicadores",
+        xaxis_title="Data",
+        yaxis_title="Preço (USD)",
+        hovermode="x unified",
+        height=600
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 if __name__ == "__main__":
     main()
