@@ -167,8 +167,8 @@ class BitcoinTradingEnv(gym.Env):
         bb_lower = current_data[f'BB_Lower_{DEFAULT_SETTINGS["bb_window"]}']
 
         obs = np.array([
-            np.log1p(price / (self.df['price'].mean() if self.df['price'].mean() else 1),
-            np.log1p(volume / (self.df['volume'].mean() if self.df['volume'].mean() else 1),
+            np.log1p(price / (self.df['price'].mean() if self.df['price'].mean() else 1)),
+            np.log1p(volume / (self.df['volume'].mean() if self.df['volume'].mean() else 1)),
             rsi / 100.0,
             macd / (price if price else 1),
             macd_signal / (price if price else 1),
